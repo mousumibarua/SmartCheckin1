@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- FLOATING CHATBOX -->
+
+        <!-- CHAT (ON TOP) -->
+        <ScrollView
+            android:id="@+id/chatScroll"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:id="@+id/chatContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="10dp"/>
+        </ScrollView>
+
+        <!-- INPUT -->
+        <EditText
+            android:id="@+id/edtMessage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:hint="Describe the emergency…"
+            android:padding="12dp"
+            android:background="@drawable/input_bg"
+            android:textSize="14sp"/>
+
+        <!-- SEND -->
+        <Button
+            android:id="@+id/btnSendSOS"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="SEND SOS"
+            android:textAllCaps="false"
+            android:textColor="@android:color/white"
+            android:backgroundTint="#D32F2F"
+            android:layout_marginTop="8dp"/>
+
+        <Button
+            android:id="@+id/btnExit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Cancel"
+            android:textAllCaps="false"
+            android:backgroundTint="#B0BEC5"
+            android:layout_marginTop="6dp"/>
+
+    </FrameLayout>
+
+

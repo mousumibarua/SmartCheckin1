@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- ================= COUNTDOWN OVERLAY (TOP FIXED) ================= -->
+    <LinearLayout
+        android:id="@+id/layoutCountdown"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="12dp"
+        android:padding="8dp"
+        android:background="@drawable/bg_timer"
+        android:elevation="10dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/txtTimeLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Time left to check-in"
+            android:textSize="13sp"
+            android:textColor="@android:color/white"
+            android:layout_marginEnd="6dp"/>
+
+        <TextView
+            android:id="@+id/txtCountdown"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="16:00"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:textColor="@android:color/white"
+            android:layout_marginEnd="4dp"/>
+
+        <TextView
+            android:id="@+id/txtMins"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="mins"
+            android:textSize="13sp"
+            android:textColor="@android:color/white"/>
+
+    </LinearLayout>
+
+    <!-- ================= MAIN CONTENT (PUSHED DOWN) ================= -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="16dp"
+        android:paddingTop="72dp"> <!-- ⬅ pushes content down -->
+
+        <TextView
+            android:id="@+id/txtStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="You are checked in"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="@android:color/holo_green_dark"
+            android:gravity="center"
+            android:padding="12dp"/>
+
+        <TextView
+            android:id="@+id/txtCheckoutTime"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Checked out at --:--"
+            android:textColor="@android:color/holo_red_dark"
+            android:textSize="14sp"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="8dp"
+            android:visibility="gone"/>
+
+        <Button
+            android:id="@+id/btnCheckout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="CHECK OUT"/>
+
+        <Button
+            android:id="@+id/btnCheckin"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="CHECK IN"/>
+
+        <Button
+            android:id="@+id/btnSOS"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="SOS 🚨"/>
+
+        <Button
+            android:id="@+id/btnRoute"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Display Shortest Route"
+            android:enabled="false"
+            android:alpha="0.5"/>
+
+        <org.osmdroid.views.MapView
+            android:id="@+id/map"
+            android:layout_width="match_parent"
+            android:layout_height="300dp"
+            android:layout_marginTop="8dp"/>
+
+    </LinearLayout>
+
+</FrameLayout>

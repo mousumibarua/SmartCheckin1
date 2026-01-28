@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:layout_marginBottom="8dp"
+    android:paddingStart="6dp"
+    android:paddingEnd="40dp">
+
+    <!-- Bot message bubble -->
+    <TextView
+        android:id="@+id/txtBotMsg"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_bot"
+        android:textColor="#212121"
+        android:padding="10dp"
+        android:textSize="14sp"
+        android:maxWidth="260dp" />
+
+    <!-- Timestamp -->
+    <TextView
+        android:id="@+id/txtTime"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="10:30 AM"
+        android:textSize="10sp"
+        android:textColor="#757575"
+        android:layout_marginStart="6dp"
+        android:layout_marginTop="2dp"/>
+</LinearLayout>
