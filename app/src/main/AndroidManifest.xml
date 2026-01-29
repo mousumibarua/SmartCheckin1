@@ -56,10 +56,7 @@
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value=".MainActivity" />
         </activity>
-        <activity
-            android:name=".SOSActivity"
-            android:theme="@style/Theme.AppCompat.Light.Dialog"
-            android:exported="false"/>
+
 
         <!-- ✅ FOREGROUND ALERT SERVICE -->
         <service

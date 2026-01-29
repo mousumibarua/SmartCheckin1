@@ -1,5 +1,3 @@
 <resources>
     <string name="app_name">SmartCheckin</string>
-    <string name="you_are_checked_in">You are checked in !!</string>
-    <string name="checked_out_at">Checked out at --:--</string>
 </resources>

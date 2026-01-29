@@ -1,7 +1,13 @@
 package com.example.smartcheckin;
 
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.content.Intent;
-import android.os.*;
+import android.content.pm.PackageManager;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.format.DateFormat;
 import android.view.View;
 import android.widget.Button;
@@ -10,6 +16,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 
 import org.osmdroid.config.Configuration;
@@ -18,11 +26,8 @@ import org.osmdroid.util.GeoPoint;
 import org.osmdroid.views.MapView;
 import org.osmdroid.views.overlay.Marker;
 import org.osmdroid.views.overlay.Polygon;
-import org.osmdroid.views.overlay.Polyline;
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider;
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay;
-
-import java.util.Calendar;
 
 import android.graphics.drawable.GradientDrawable;
 import android.view.animation.Animation;
@@ -30,43 +35,32 @@ import android.view.animation.AnimationUtils;
 
 public class MainActivity extends AppCompatActivity {
 
+    private static final String CHANNEL_ID = "checkin_alerts";
+
     MapView map;
     MyLocationNewOverlay locationOverlay;
-    Handler handler = new Handler();
 
-    GeoPoint campus = new GeoPoint(12.9716, 77.5946);
-
-    Polyline routeLine;
     Button btnCheckout, btnCheckin, btnSOS, btnRoute;
     TextView txtStatus, txtCheckoutTime, txtCountdown;
     LinearLayout layoutCountdown;
 
-    private Handler countdownHandler = new Handler(Looper.getMainLooper());
+    private final Handler countdownHandler = new Handler(Looper.getMainLooper());
     private Runnable countdownRunnable;
     private Animation pulseAnim;
 
-    // 🔴 SOS escalation flags
-    private boolean warned10 = false;
-    private boolean warned5 = false;
-    private boolean timeOverHandled = false;
+    private boolean alert15Shown = false;
+    private boolean alert10Shown = false;
+    private boolean alert5Shown  = false;
+    private boolean violationShown = false;
+
+    GeoPoint campus = new GeoPoint(12.9716, 77.5946);
 
     @Override
-    protected void onResume() {
-        super.onResume();
-        updateUI();
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        handler.removeCallbacksAndMessages(null);
-        countdownHandler.removeCallbacksAndMessages(null);
-    }
-
-    @Override
-    protected void onCreate(Bundle b) {
-        super.onCreate(b);
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        createNotificationChannel();
 
         txtStatus = findViewById(R.id.txtStatus);
         txtCheckoutTime = findViewById(R.id.txtCheckoutTime);
@@ -80,31 +74,29 @@ public class MainActivity extends AppCompatActivity {
 
         pulseAnim = AnimationUtils.loadAnimation(this, R.anim.pulse);
 
-        updateUI();
-
         btnCheckout.setOnClickListener(v -> startCheckoutFlow());
 
         btnCheckin.setOnClickListener(v -> {
             Utils.setCheckedOut(this, false);
-            stopService(new Intent(this, AlertService.class));
-
-            // reset flags
-            warned10 = false;
-            warned5 = false;
-            timeOverHandled = false;
-
-            Toast.makeText(this, "Checked in successfully!", Toast.LENGTH_SHORT).show();
+            resetAlerts();
             updateUI();
+            Toast.makeText(this, "Checked in successfully!", Toast.LENGTH_SHORT).show();
         });
 
         btnRoute.setOnClickListener(v ->
                 startActivity(new Intent(this, RouteActivity.class)));
 
-        // ✅ SOS opens ONLY on button click
         btnSOS.setOnClickListener(v ->
-                startActivity(new Intent(this, SOSActivity.class)));
+                new SOSChatDialogFragment()
+                        .show(getSupportFragmentManager(), "SOS_CHAT"));
 
-        // MAP SETUP
+        setupMap();
+        updateUI();
+    }
+
+    /* ================= MAP ================= */
+
+    private void setupMap() {
         Configuration.getInstance().setUserAgentValue(getPackageName());
         map = findViewById(R.id.map);
         map.setTileSource(TileSourceFactory.MAPNIK);
@@ -126,20 +118,20 @@ public class MainActivity extends AppCompatActivity {
         drawGeofence(campus, 300);
     }
 
+    /* ================= CHECKOUT ================= */
+
     private void startCheckoutFlow() {
-
         Utils.setCheckedOut(this, true);
-
-        warned10 = false;
-        warned5 = false;
-        timeOverHandled = false;
-
+        resetAlerts();
         updateUI();
-
-        startAlertService();
-
         Toast.makeText(this, "Checked out! Monitoring started.", Toast.LENGTH_SHORT).show();
     }
+
+    private void resetAlerts() {
+        alert15Shown = alert10Shown = alert5Shown = violationShown = false;
+    }
+
+    /* ================= UI ================= */
 
     private void updateUI() {
 
@@ -147,133 +139,155 @@ public class MainActivity extends AppCompatActivity {
 
         if (Utils.isCheckedOut(this)) {
 
-            txtStatus.setText("You are checked out");
-            txtStatus.setTextColor(ContextCompat.getColor(this,
-                    android.R.color.holo_red_dark));
+            long deadlineMs = checkoutTime + (15 * 60 * 1000);
 
-            if (checkoutTime > 0) {
-                txtCheckoutTime.setText(
-                        "Checked out at " +
-                                DateFormat.format("hh:mm a", checkoutTime));
-                txtCheckoutTime.setVisibility(View.VISIBLE);
+            if (System.currentTimeMillis() > deadlineMs) {
+                txtStatus.setText("You are checked out, deadline lapsed!!");
+            } else {
+                txtStatus.setText("You are checked out");
             }
+
+            txtStatus.setTextColor(
+                    ContextCompat.getColor(this, android.R.color.holo_red_dark)
+            );
+
+            txtCheckoutTime.setText(
+                    "Checked out at " +
+                            DateFormat.format("hh:mm a", checkoutTime));
+            txtCheckoutTime.setVisibility(View.VISIBLE);
 
             btnCheckout.setEnabled(false);
             btnCheckin.setEnabled(true);
             btnRoute.setEnabled(true);
 
-            startCountdownIfNeeded();
+            startCountdown();
 
         } else {
 
             txtStatus.setText("You are checked in");
-            txtStatus.setTextColor(ContextCompat.getColor(this,
-                    android.R.color.holo_green_dark));
+            txtStatus.setTextColor(
+                    ContextCompat.getColor(this, android.R.color.holo_green_dark));
+
+            txtCheckoutTime.setVisibility(View.GONE);
+            layoutCountdown.setVisibility(View.GONE);
 
             btnCheckout.setEnabled(true);
             btnCheckin.setEnabled(false);
             btnRoute.setEnabled(false);
 
-            layoutCountdown.setVisibility(View.GONE);
-            txtCountdown.clearAnimation();
             countdownHandler.removeCallbacksAndMessages(null);
         }
     }
 
-    private void startCountdownIfNeeded() {
+    /* ================= COUNTDOWN ================= */
+
+    private void startCountdown() {
 
         countdownHandler.removeCallbacksAndMessages(null);
 
-        if (!Utils.isCheckedOut(this)) {
-            layoutCountdown.setVisibility(View.GONE);
-            return;
-        }
+        long checkoutTime = Utils.getCheckoutTime(this);
+        long deadline = checkoutTime + (15 * 60 * 1000);
 
-        Calendar deadline = Calendar.getInstance();
-        deadline.add(Calendar.MINUTE, 15); // testing
+        countdownRunnable = () -> {
 
-        countdownRunnable = new Runnable() {
-            @Override
-            public void run() {
+            long remaining = deadline - System.currentTimeMillis();
 
-                long remainingMs = deadline.getTimeInMillis()
-                        - System.currentTimeMillis();
-
-                if (remainingMs <= 0) {
-
-                    if (!timeOverHandled) {
-                        timeOverHandled = true;
-                        startAlertService();
-
-                        Toast.makeText(MainActivity.this,
-                                "🚨 Time over! Press SOS if you need help.",
-                                Toast.LENGTH_LONG).show();
-                    }
-
-                    layoutCountdown.setVisibility(View.GONE);
-                    txtCountdown.clearAnimation();
-                    return;
+            if (remaining <= 0) {
+                if (!violationShown) {
+                    violationShown = true;
+                    showNotification(
+                            104,
+                            "Check-in Deadline Violated",
+                            "❌ Deadline violated on " +
+                                    DateFormat.format("dd MMM yyyy, hh:mm a",
+                                            new java.util.Date())
+                    );
                 }
-
-                long minutes = remainingMs / 60000;
-                long seconds = (remainingMs / 1000) % 60;
-
-                layoutCountdown.setVisibility(View.VISIBLE);
-                txtCountdown.setText(
-                        String.format("%02d:%02d", minutes, seconds));
-
-                GradientDrawable bg =
-                        (GradientDrawable) layoutCountdown.getBackground();
-
-                if (remainingMs > 10 * 60 * 1000) {
-
-                    bg.setColor(0xFF2E7D32);
-                    txtCountdown.clearAnimation();
-
-                } else if (remainingMs > 5 * 60 * 1000) {
-
-                    bg.setColor(0xFFF9A825);
-                    txtCountdown.clearAnimation();
-
-                    if (!warned10) {
-                        warned10 = true;
-                        Toast.makeText(MainActivity.this,
-                                "⚠️ 10 minutes remaining.",
-                                Toast.LENGTH_SHORT).show();
-                    }
-
-                } else {
-
-                    bg.setColor(0xFFC62828);
-
-                    if (!warned5) {
-                        warned5 = true;
-                        startAlertService();
-                        Toast.makeText(MainActivity.this,
-                                "🚨 5 minutes remaining!",
-                                Toast.LENGTH_LONG).show();
-                    }
-
-                    if (txtCountdown.getAnimation() == null) {
-                        txtCountdown.startAnimation(pulseAnim);
-                    }
-                }
-
-                countdownHandler.postDelayed(this, 1000);
+                layoutCountdown.setVisibility(View.GONE);
+                return;
             }
+
+            long min = remaining / 60000;
+            long sec = (remaining / 1000) % 60;
+
+            layoutCountdown.setVisibility(View.VISIBLE);
+            txtCountdown.setText(String.format("%02d:%02d", min, sec));
+
+            GradientDrawable bg =
+                    (GradientDrawable) layoutCountdown.getBackground();
+
+            if (remaining > 10 * 60 * 1000) {
+                bg.setColor(0xFF2E7D32);
+                if (!alert15Shown) {
+                    alert15Shown = true;
+                    showNotification(101,
+                            "Check-in Reminder",
+                            "🟢 15 minutes left to check in");
+                }
+            } else if (remaining > 5 * 60 * 1000) {
+                bg.setColor(0xFFF9A825);
+                if (!alert10Shown) {
+                    alert10Shown = true;
+                    showNotification(102,
+                            "Check-in Warning",
+                            "🟡 10 minutes left to check in");
+                }
+            } else {
+                bg.setColor(0xFFC62828);
+                if (!alert5Shown) {
+                    alert5Shown = true;
+                    showNotification(103,
+                            "Urgent Check-in",
+                            "🔴 Only 5 minutes left!");
+                }
+                if (txtCountdown.getAnimation() == null) {
+                    txtCountdown.startAnimation(pulseAnim);
+                }
+            }
+
+            countdownHandler.postDelayed(countdownRunnable, 1000);
         };
 
         countdownHandler.post(countdownRunnable);
     }
 
-    private void startAlertService() {
-        Intent i = new Intent(this, AlertService.class);
-        if (Build.VERSION.SDK_INT >= 26) {
-            startForegroundService(i);
-        } else {
-            startService(i);
+    /* ================= NOTIFICATIONS ================= */
+
+    private void showNotification(int id, String title, String msg) {
+        NotificationCompat.Builder builder =
+                new NotificationCompat.Builder(this, CHANNEL_ID)
+                        .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                        .setContentTitle(title)
+                        .setContentText(msg)
+                        .setStyle(new NotificationCompat.BigTextStyle().bigText(msg))
+                        .setPriority(NotificationCompat.PRIORITY_HIGH)
+                        .setAutoCancel(true);
+
+        NotificationManagerCompat nm = NotificationManagerCompat.from(this);
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(
+                        this,
+                        android.Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED) {
+
+            nm.notify(id, builder.build());
         }
     }
+
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                    CHANNEL_ID,
+                    "Check-in Alerts",
+                    NotificationManager.IMPORTANCE_HIGH
+            );
+            getSystemService(NotificationManager.class)
+                    .createNotificationChannel(channel);
+        }
+    }
+
+    /* ================= GEOFENCE ================= */
 
     void drawGeofence(GeoPoint center, int radiusMeters) {
         Polygon circle = new Polygon();
