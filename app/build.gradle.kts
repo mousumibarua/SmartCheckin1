@@ -1,17 +1,17 @@
 plugins {
-    alias(libs.plugins.android.application)
+    id("com.android.application")
+    id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
 }
 
 android {
     namespace = "com.example.smartcheckin"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.example.smartcheckin"
         minSdk = 24
-        targetSdk = 36
+        targetSdk = 34
         versionCode = 1
         versionName = "1.0"
 
@@ -27,6 +27,7 @@ android {
             )
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -34,12 +35,24 @@ android {
 }
 
 dependencies {
+
+    // AndroidX & UI
     implementation(libs.appcompat)
     implementation(libs.material)
+
+    // Location
     implementation(libs.play.services.location)
+
+    // OSMDroid
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
+
+    // 🔥 Firebase BOM (order does NOT matter, but keep it clean)
+    implementation(platform("com.google.firebase:firebase-bom:33.3.0"))
+    implementation("com.google.firebase:firebase-analytics")
+    implementation("com.google.firebase:firebase-crashlytics")
+
+    // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
-    implementation("org.osmdroid:osmdroid-android:6.1.20")
-    implementation("com.google.android.material:material:1.11.0")
 }

@@ -2,26 +2,34 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- ========== FEATURES & PERMISSIONS ========== -->
+
     <uses-feature
         android:name="android.hardware.telephony"
         android:required="false" />
 
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"
-        tools:ignore="ForegroundServicesPolicy" />
+
     <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+        android:name="android.permission.FOREGROUND_SERVICE"
+        tools:ignore="ForegroundServicesPolicy"/>
+
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.CALL_PHONE"/>
-    <uses-permission android:name="android.permission.SEND_SMS"
-        tools:ignore="SmsAndCallLogPolicy" />
+    <uses-permission
+        android:name="android.permission.SEND_SMS"
+        tools:ignore="SmsAndCallLogPolicy"/>
+
     <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <!-- ========== APPLICATION ========== -->
 
     <application
-
-        android:exported="true"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -30,46 +38,50 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.SmartCheckin"
-
-        android:foregroundServiceType="location"
         android:usesCleartextTraffic="true"
+        android:foregroundServiceType="location"
         tools:ignore="Instantiatable">
 
-    <!-- ✅ MAIN / LAUNCHER ACTIVITY -->
-    <activity
-        android:name=".MainActivity"
-        android:exported="true">
+        <!-- 🔐 LOCK SCREEN (LAUNCHER) -->
+        <activity
+            android:name=".LockActivity"
+            android:exported="true">
 
-        <intent-filter>
-            <action android:name="android.intent.action.MAIN" />
-            <category android:name="android.intent.category.LAUNCHER" />
-        </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
 
-    </activity>
+        </activity>
+
+        <!-- 🏠 MAIN ACTIVITY (AFTER UNLOCK) -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"/>
+
+        <!-- 🗺 ROUTE ACTIVITY -->
         <activity
             android:name=".RouteActivity"
             android:exported="false"
             android:parentActivityName=".MainActivity">
 
-            <!-- Support for older Android versions -->
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
-                android:value=".MainActivity" />
+                android:value=".MainActivity"/>
         </activity>
 
-
-        <!-- ✅ FOREGROUND ALERT SERVICE -->
+        <!-- 🚨 FOREGROUND ALERT SERVICE -->
         <service
             android:name=".AlertService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback"
-            tools:ignore="ForegroundServicePermission" />
+            tools:ignore="ForegroundServicePermission"/>
 
+        <!-- 📍 GEOFENCE RECEIVER -->
         <receiver
             android:name=".GeofenceReceiver"
             android:exported="false"/>
 
     </application>
-
 
 </manifest>
