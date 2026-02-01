@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "631012338818",
+    "project_id": "smartcheckin-368ce",
+    "storage_bucket": "smartcheckin-368ce.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:631012338818:android:503e09c0ae50833394d89b",
+        "android_client_info": {
+          "package_name": "com.example.smartcheckin"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD7I1UZj8PGfGu2-Wbrs4kXWObtCnUDgFc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

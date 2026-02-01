@@ -1,5 +1,6 @@
 package com.example.smartcheckin;
 
+import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -9,6 +10,7 @@ import android.view.View;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 
 import org.json.JSONObject;
 import org.osmdroid.config.Configuration;
@@ -23,6 +25,12 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
+import android.content.Intent;
+import android.net.Uri;
+import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.location.LocationServices;
+
+
 
 public class RouteActivity extends AppCompatActivity {
 
@@ -37,11 +45,13 @@ public class RouteActivity extends AppCompatActivity {
     private int animIndex = 0;
     private Handler routeAnimHandler;
     private boolean isAnimating = false;
+    private FusedLocationProviderClient fusedLocationClient;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_route);
+        Configuration.getInstance().setUserAgentValue(getPackageName());
 
         View backBtn = findViewById(R.id.btnBack);
         if (backBtn != null)backBtn.setOnClickListener(v -> {
@@ -53,6 +63,8 @@ public class RouteActivity extends AppCompatActivity {
                 getApplicationContext(),
                 PreferenceManager.getDefaultSharedPreferences(this)
         );
+        fusedLocationClient =
+                LocationServices.getFusedLocationProviderClient(this);
 
         map = findViewById(R.id.map);
         map.setMultiTouchControls(true);
@@ -63,6 +75,7 @@ public class RouteActivity extends AppCompatActivity {
         addMarker(campusLocation, "Campus");
 
         fetchRouteETA("walking");
+
     }
 
     /* ---------------- ADD MAP MARKER ---------------- */
@@ -100,11 +113,18 @@ public class RouteActivity extends AppCompatActivity {
 
                 parseRoute(route);
 
-            } catch (Exception e) {
-                runOnUiThread(() ->
-                        Toast.makeText(this,
-                                "Unable to fetch route",
-                                Toast.LENGTH_SHORT).show());
+            }catch (Exception e) {
+                Log.e("ROUTE_ERROR", "OSRM route failed", e);
+
+                runOnUiThread(() -> {
+                    Toast.makeText(
+                            this,
+                            "Routing service unavailable.\nOpening Google Maps.",
+                            Toast.LENGTH_LONG
+                    ).show();
+
+                    openGoogleMapsFallback();
+                });
             }
         }).start();
     }
@@ -231,5 +251,69 @@ public class RouteActivity extends AppCompatActivity {
     protected void onDestroy() {
         stopRouteAnimation();
         super.onDestroy();
+    }
+    /* ---------------- GOOGLE MAPS FALLBACK ---------------- */
+    private void openGoogleMapsFallback() {
+
+        String uri = "google.navigation:q=" +
+                campusLocation.getLatitude() + "," +
+                campusLocation.getLongitude() +
+                "&mode=w"; // walking
+
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(uri));
+        intent.setPackage("com.google.android.apps.maps");
+
+        try {
+            startActivity(intent);
+        } catch (Exception e) {
+            // If Google Maps is not installed
+            Intent browserIntent = new Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse(
+                            "https://www.google.com/maps/dir/?api=1&destination="
+                                    + campusLocation.getLatitude() + ","
+                                    + campusLocation.getLongitude()
+                                    + "&travelmode=walking"
+                    )
+            );
+            startActivity(browserIntent);
+        }
+    }
+    private void fetchUserLocationAndRoute() {
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.ACCESS_FINE_LOCATION
+        ) != PackageManager.PERMISSION_GRANTED) {
+
+            Toast.makeText(this,
+                    "Location permission not granted",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        fusedLocationClient.getLastLocation()
+                .addOnSuccessListener(location -> {
+
+                    if (location == null) {
+                        Toast.makeText(this,
+                                "Unable to get GPS location",
+                                Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
+                    // ✅ LIVE GPS HERE
+                    userLocation = new GeoPoint(
+                            location.getLatitude(),
+                            location.getLongitude()
+                    );
+
+                    map.getController().setCenter(userLocation);
+                    addMarker(userLocation, "You are here");
+
+                    // 🔥 Now call OSRM
+                   // fetchRouteETA("walking");
+                    fetchUserLocationAndRoute();
+                });
     }
 }

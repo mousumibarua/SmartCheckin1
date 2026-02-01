@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Student Registration"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="24dp" />
+
+    <!-- Phone Number -->
+    <EditText
+        android:id="@+id/edtPhone"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Enter 10-digit phone number"
+        android:inputType="phone"
+        android:maxLength="10" />
+
+    <!-- Registration ID -->
+    <EditText
+        android:id="@+id/edtRegId"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Enter Registration ID"
+        android:inputType="text"
+        android:layout_marginTop="12dp" />
+
+    <!-- Send OTP -->
+    <Button
+        android:id="@+id/btnSendOtp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Send OTP"
+        android:layout_marginTop="20dp" />
+
+    <!-- ⏳ OTP LOADING SPINNER -->
+    <ProgressBar
+        android:id="@+id/progressOtp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        android:layout_marginTop="12dp"/>
+
+</LinearLayout>

@@ -32,6 +32,9 @@ import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay;
 import android.graphics.drawable.GradientDrawable;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
+import com.google.firebase.analytics.FirebaseAnalytics;
+import android.view.Menu;
+import android.view.MenuItem;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -52,8 +55,31 @@ public class MainActivity extends AppCompatActivity {
     private boolean alert10Shown = false;
     private boolean alert5Shown  = false;
     private boolean violationShown = false;
+    private FirebaseAnalytics firebaseAnalytics;
 
     GeoPoint campus = new GeoPoint(12.9716, 77.5946);
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.main_menu, menu);
+        return true;
+    }
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+
+        int id = item.getItemId();
+
+        if (id == R.id.menu_logout) {
+            logoutUser();
+            return true;
+        }
+
+        if (id == R.id.menu_deregister) {
+            deregisterUser();
+            return true;
+        }
+
+        return super.onOptionsItemSelected(item);
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -61,6 +87,11 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         createNotificationChannel();
+        firebaseAnalytics = FirebaseAnalytics.getInstance(this);
+        Bundle bundle = new Bundle();
+        bundle.putString("screen", "MainActivity");
+        firebaseAnalytics.logEvent("app_opened", bundle);
+
 
         txtStatus = findViewById(R.id.txtStatus);
         txtCheckoutTime = findViewById(R.id.txtCheckoutTime);
@@ -80,6 +111,10 @@ public class MainActivity extends AppCompatActivity {
             Utils.setCheckedOut(this, false);
             resetAlerts();
             updateUI();
+           // Bundle bundle = new Bundle();
+            bundle.putString("action", "checkin");
+            firebaseAnalytics.logEvent("user_checkin", bundle);
+
             Toast.makeText(this, "Checked in successfully!", Toast.LENGTH_SHORT).show();
         });
 
@@ -125,6 +160,10 @@ public class MainActivity extends AppCompatActivity {
         resetAlerts();
         updateUI();
         Toast.makeText(this, "Checked out! Monitoring started.", Toast.LENGTH_SHORT).show();
+        Bundle bundle = new Bundle();
+        bundle.putString("action", "checkout");
+        firebaseAnalytics.logEvent("user_checkout", bundle);
+
     }
 
     private void resetAlerts() {
@@ -195,6 +234,9 @@ public class MainActivity extends AppCompatActivity {
             if (remaining <= 0) {
                 if (!violationShown) {
                     violationShown = true;
+                    Bundle bundle = new Bundle();
+                    bundle.putString("violation", "checkout_deadline");
+                    firebaseAnalytics.logEvent("deadline_violated", bundle);
                     showNotification(
                             104,
                             "Check-in Deadline Violated",
@@ -296,5 +338,33 @@ public class MainActivity extends AppCompatActivity {
         circle.setStrokeColor(0xFF0000FF);
         circle.setStrokeWidth(3f);
         map.getOverlays().add(circle);
+    }
+    private void deregisterUser() {
+
+        // 1️⃣ Clear SharedPreferences
+        getSharedPreferences("SmartCheckinPrefs", MODE_PRIVATE)
+                .edit()
+                .clear()
+                .apply();
+
+        // 2️⃣ Optional: Firebase sign out (safe even if not used)
+        try {
+            com.google.firebase.auth.FirebaseAuth.getInstance().signOut();
+        } catch (Exception ignored) {}
+
+        // 3️⃣ Go back to Register screen
+        Intent intent = new Intent(this, RegisterActivity.class);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        startActivity(intent);
+
+        finish();
+    }
+    private void logoutUser() {
+
+        Toast.makeText(this, "Logged out", Toast.LENGTH_SHORT).show();
+
+        Intent intent = new Intent(this, LockActivity.class);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        startActivity(intent);
     }
 }

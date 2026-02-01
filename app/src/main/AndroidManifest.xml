@@ -53,6 +53,9 @@
             </intent-filter>
 
         </activity>
+        <activity
+            android:name=".RegisterActivity"
+            android:exported="false" />
 
         <!-- 🏠 MAIN ACTIVITY (AFTER UNLOCK) -->
         <activity
@@ -69,6 +72,9 @@
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value=".MainActivity"/>
         </activity>
+        <activity
+            android:name=".OtpActivity"
+            android:exported="false" />
 
         <!-- 🚨 FOREGROUND ALERT SERVICE -->
         <service
