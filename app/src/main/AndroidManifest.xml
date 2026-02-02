@@ -2,30 +2,23 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- ========== FEATURES & PERMISSIONS ========== -->
+    <!-- ========== PERMISSIONS ========== -->
 
-    <uses-feature
-        android:name="android.hardware.telephony"
-        android:required="false" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-
+    <!-- Optional (used elsewhere in app) -->
     <uses-permission
         android:name="android.permission.FOREGROUND_SERVICE"
-        tools:ignore="ForegroundServicesPolicy"/>
-
-    <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
-
-    <uses-permission android:name="android.permission.VIBRATE"/>
-    <uses-permission android:name="android.permission.CALL_PHONE"/>
-    <uses-permission
-        android:name="android.permission.SEND_SMS"
-        tools:ignore="SmsAndCallLogPolicy"/>
-
-    <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+        tools:ignore="ForegroundServicesPolicy" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
 
     <!-- ========== APPLICATION ========== -->
 
@@ -38,55 +31,53 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.SmartCheckin"
-        android:usesCleartextTraffic="true"
-        android:foregroundServiceType="location"
-        tools:ignore="Instantiatable">
+        android:usesCleartextTraffic="true">
 
         <!-- 🔐 LOCK SCREEN (LAUNCHER) -->
         <activity
             android:name=".LockActivity"
             android:exported="true">
-
             <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
         </activity>
+
+        <!-- 📝 REGISTRATION -->
         <activity
             android:name=".RegisterActivity"
             android:exported="false" />
 
-        <!-- 🏠 MAIN ACTIVITY (AFTER UNLOCK) -->
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"/>
-
-        <!-- 🗺 ROUTE ACTIVITY -->
-        <activity
-            android:name=".RouteActivity"
-            android:exported="false"
-            android:parentActivityName=".MainActivity">
-
-            <meta-data
-                android:name="android.support.PARENT_ACTIVITY"
-                android:value=".MainActivity"/>
-        </activity>
+        <!-- 🔐 OTP -->
         <activity
             android:name=".OtpActivity"
             android:exported="false" />
 
-        <!-- 🚨 FOREGROUND ALERT SERVICE -->
+        <!-- 🏠 MAIN -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true" />
+
+        <!-- 🗺 ROUTE / MAP -->
+        <activity
+            android:name=".RouteActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity">
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".MainActivity" />
+        </activity>
+
+        <!-- 🚨 ALERT SERVICE -->
         <service
             android:name=".AlertService"
             android:exported="false"
-            android:foregroundServiceType="mediaPlayback"
-            tools:ignore="ForegroundServicePermission"/>
+            tools:ignore="ForegroundServicePermission" />
 
-        <!-- 📍 GEOFENCE RECEIVER -->
+        <!-- 📍 GEOFENCE -->
         <receiver
             android:name=".GeofenceReceiver"
-            android:exported="false"/>
+            android:exported="false" />
 
     </application>
 

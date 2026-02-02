@@ -1,6 +1,9 @@
 package com.example.smartcheckin;
 
+import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -10,10 +13,15 @@ import android.view.View;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+
+import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.location.LocationServices;
 
 import org.json.JSONObject;
 import org.osmdroid.config.Configuration;
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory;
 import org.osmdroid.util.GeoPoint;
 import org.osmdroid.views.MapView;
 import org.osmdroid.views.overlay.Marker;
@@ -25,266 +33,99 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
-import android.content.Intent;
-import android.net.Uri;
-import com.google.android.gms.location.FusedLocationProviderClient;
-import com.google.android.gms.location.LocationServices;
-
-
 
 public class RouteActivity extends AppCompatActivity {
 
+    // ===== CONFIG =====
+    private static final long ETA_INTERVAL = 2 * 60 * 1000; // 2 minutes
+    private static final double DESTINATION_RADIUS = 50;    // meters
+
     private MapView map;
+    private Polyline routeLine;
+    private Marker userMarker;
 
-    private GeoPoint userLocation =
-            new GeoPoint(13.0827, 80.2707);
     private GeoPoint campusLocation =
-            new GeoPoint(13.0900, 80.2800);
+            new GeoPoint(13.0900, 80.2800); // campus
+    private GeoPoint userLocation;
 
-    private Polyline animatedRoute;
-    private int animIndex = 0;
-    private Handler routeAnimHandler;
-    private boolean isAnimating = false;
     private FusedLocationProviderClient fusedLocationClient;
+    private Handler etaHandler;
+
+    private double lastEtaMinutes = -1;
+
+    /* ================= LIFECYCLE ================= */
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_route);
-        Configuration.getInstance().setUserAgentValue(getPackageName());
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
 
-        View backBtn = findViewById(R.id.btnBack);
-        if (backBtn != null)backBtn.setOnClickListener(v -> {
-            stopRouteAnimation();
-            finish();
-        });
+            ActivityCompat.requestPermissions(
+                    this,
+                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
+                    101
+            );
+        }
 
+        // 🔴 REQUIRED OSMDROID CONFIG
         Configuration.getInstance().load(
                 getApplicationContext(),
                 PreferenceManager.getDefaultSharedPreferences(this)
         );
+        Configuration.getInstance().setUserAgentValue(
+                "SmartCheckin/1.0 (student-project)"
+        );
+
         fusedLocationClient =
                 LocationServices.getFusedLocationProviderClient(this);
 
         map = findViewById(R.id.map);
+        map.setTileSource(TileSourceFactory.MAPNIK);
+        map.setUseDataConnection(true);
         map.setMultiTouchControls(true);
-        map.getController().setZoom(15.0);
-        map.getController().setCenter(userLocation);
+        map.getController().setZoom(16.0);
+        map.getController().setCenter(campusLocation);
 
-        addMarker(userLocation, "You are here");
         addMarker(campusLocation, "Campus");
 
+        View backBtn = findViewById(R.id.btnBack);
+        if (backBtn != null) {
+            backBtn.setOnClickListener(v -> finish());
+        }
+        userLocation = campusLocation;
         fetchRouteETA("walking");
-
+        fetchUserLocationAndRoute();
     }
 
-    /* ---------------- ADD MAP MARKER ---------------- */
-    private void addMarker(GeoPoint point, String title) {
-        Marker marker = new Marker(map);
-        marker.setPosition(point);
-        marker.setTitle(title);
-        map.getOverlays().add(marker);
+    @Override
+    protected void onResume() {
+        super.onResume();
+        startEtaUpdates();
     }
 
-    /* ---------------- FETCH ROUTE ---------------- */
-    private void fetchRouteETA(String mode) {
-
-        new Thread(() -> {
-            try {
-                String urlStr =
-                        "https://router.project-osrm.org/route/v1/" + mode + "/" +
-                                userLocation.getLongitude() + "," + userLocation.getLatitude() + ";" +
-                                campusLocation.getLongitude() + "," + campusLocation.getLatitude() +
-                                "?overview=full&geometries=geojson";
-
-                URL url = new URL(urlStr);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.connect();
-
-                BufferedReader br =
-                        new BufferedReader(new InputStreamReader(conn.getInputStream()));
-
-                StringBuilder json = new StringBuilder();
-                String line;
-                while ((line = br.readLine()) != null) json.append(line);
-
-                JSONObject response = new JSONObject(json.toString());
-                JSONObject route = response.getJSONArray("routes").getJSONObject(0);
-
-                parseRoute(route);
-
-            }catch (Exception e) {
-                Log.e("ROUTE_ERROR", "OSRM route failed", e);
-
-                runOnUiThread(() -> {
-                    Toast.makeText(
-                            this,
-                            "Routing service unavailable.\nOpening Google Maps.",
-                            Toast.LENGTH_LONG
-                    ).show();
-
-                    openGoogleMapsFallback();
-                });
-            }
-        }).start();
+    @Override
+    protected void onPause() {
+        super.onPause();
+        stopEtaUpdates();
     }
 
-    /* ---------------- PARSE ROUTE ---------------- */
-    private void parseRoute(JSONObject route) throws Exception {
-
-        double durationSec = route.getDouble("duration");
-        double distanceM = route.getDouble("distance");
-
-        int routeColor = getRouteColor(distanceM, durationSec);
-
-        JSONObject geometry = route.getJSONObject("geometry");
-        org.json.JSONArray coords = geometry.getJSONArray("coordinates");
-
-        List<GeoPoint> points = new ArrayList<>();
-
-        for (int i = 0; i < coords.length(); i++) {
-            org.json.JSONArray c = coords.getJSONArray(i);
-            points.add(new GeoPoint(c.getDouble(1), c.getDouble(0)));
-        }
-
-        runOnUiThread(() -> {
-
-            if (points.size() < 2) {
-                Toast.makeText(
-                        this,
-                        "Route data unavailable",
-                        Toast.LENGTH_SHORT
-                ).show();
-                return;
-            }
-
-            animateRoute(points, routeColor);
-            showETA(durationSec, distanceM);
-        });
-    }
-
-    /* ---------------- ANIMATE ROUTE (CRASH-PROOF) ---------------- */
-    private void animateRoute(List<GeoPoint> points, int routeColor) {
-
-        if (points == null || points.size() < 2) return;
-
-        // Stop any previous animation
-        stopRouteAnimation();
-
-        if (animatedRoute != null) {
-            map.getOverlays().remove(animatedRoute);
-        }
-
-        animatedRoute = new Polyline();
-        animatedRoute.setWidth(9f);
-        animatedRoute.setColor(routeColor);
-        map.getOverlays().add(animatedRoute);
-
-        List<GeoPoint> drawPoints = new ArrayList<>();
-        routeAnimHandler = new Handler(Looper.getMainLooper());
-        animIndex = 0;
-        isAnimating = true;
-
-        routeAnimHandler.post(new Runnable() {
-            @Override
-            public void run() {
-
-                // 🛑 STOP CONDITIONS (CRITICAL)
-                if (!isAnimating || map == null || animatedRoute == null) {
-                    return;
-                }
-
-                if (animIndex >= points.size()) {
-                    isAnimating = false;
-                    return;
-                }
-
-                drawPoints.add(points.get(animIndex));
-
-                if (drawPoints.size() >= 2) {
-                    animatedRoute.setPoints(drawPoints);
-                    map.invalidate();
-                }
-
-                animIndex++;
-                routeAnimHandler.postDelayed(this, 25);
-            }
-        });
-    }
-
-    private void stopRouteAnimation() {
-
-        isAnimating = false;
-
-        if (routeAnimHandler != null) {
-            routeAnimHandler.removeCallbacksAndMessages(null);
-            routeAnimHandler = null;
-        }
-    }
-    /* ---------------- SHOW ETA ---------------- */
-    private void showETA(double durationSec, double distanceM) {
-
-        double minutes = durationSec / 60;
-        double km = distanceM / 1000;
-
-        Toast.makeText(
-                this,
-                "Shortest route found\n" +
-                        "ETA: " + String.format("%.1f", minutes) + " mins\n" +
-                        "Distance: " + String.format("%.2f", km) + " km",
-                Toast.LENGTH_LONG
-        ).show();
-    }
-
-    private int getRouteColor(double distanceM, double durationSec) {
-
-        double speed = distanceM / durationSec;
-        Log.d("ROUTE", "Avg speed = " + speed);
-
-        if (speed <= 8) {
-            return 0xFFFF0000; // red
-        } else {
-            return 0xFF2E7D32; // green
-        }
-    }
     @Override
     protected void onDestroy() {
-        stopRouteAnimation();
+        stopEtaUpdates();
         super.onDestroy();
     }
-    /* ---------------- GOOGLE MAPS FALLBACK ---------------- */
-    private void openGoogleMapsFallback() {
 
-        String uri = "google.navigation:q=" +
-                campusLocation.getLatitude() + "," +
-                campusLocation.getLongitude() +
-                "&mode=w"; // walking
+    /* ================= GPS ================= */
 
-        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(uri));
-        intent.setPackage("com.google.android.apps.maps");
-
-        try {
-            startActivity(intent);
-        } catch (Exception e) {
-            // If Google Maps is not installed
-            Intent browserIntent = new Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse(
-                            "https://www.google.com/maps/dir/?api=1&destination="
-                                    + campusLocation.getLatitude() + ","
-                                    + campusLocation.getLongitude()
-                                    + "&travelmode=walking"
-                    )
-            );
-            startActivity(browserIntent);
-        }
-    }
     private void fetchUserLocationAndRoute() {
 
         if (ContextCompat.checkSelfPermission(
-                this,
-                android.Manifest.permission.ACCESS_FINE_LOCATION
-        ) != PackageManager.PERMISSION_GRANTED) {
+                this, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
 
             Toast.makeText(this,
                     "Location permission not granted",
@@ -295,25 +136,195 @@ public class RouteActivity extends AppCompatActivity {
         fusedLocationClient.getLastLocation()
                 .addOnSuccessListener(location -> {
 
-                    if (location == null) {
-                        Toast.makeText(this,
-                                "Unable to get GPS location",
-                                Toast.LENGTH_SHORT).show();
-                        return;
-                    }
+                    if (location == null) return;
 
-                    // ✅ LIVE GPS HERE
                     userLocation = new GeoPoint(
                             location.getLatitude(),
                             location.getLongitude()
                     );
 
                     map.getController().setCenter(userLocation);
-                    addMarker(userLocation, "You are here");
+                    updateUserMarker(userLocation);
 
-                    // 🔥 Now call OSRM
-                   // fetchRouteETA("walking");
-                    fetchUserLocationAndRoute();
+                    // 🔥 FETCH SHORTEST ROUTE + ETA
+                    fetchRouteETA("walking");
                 });
     }
+
+    /* ================= ROUTING ================= */
+
+    private void fetchRouteETA(String mode) {
+
+        new Thread(() -> {
+            try {
+                String urlStr =
+                        "https://router.project-osrm.org/route/v1/" + mode + "/" +
+                                userLocation.getLongitude() + "," + userLocation.getLatitude() + ";" +
+                                campusLocation.getLongitude() + "," + campusLocation.getLatitude() +
+                                "?overview=full&geometries=geojson";
+
+                HttpURLConnection conn =
+                        (HttpURLConnection) new URL(urlStr).openConnection();
+                conn.connect();
+
+                BufferedReader br =
+                        new BufferedReader(new InputStreamReader(conn.getInputStream()));
+
+                StringBuilder json = new StringBuilder();
+                String line;
+                while ((line = br.readLine()) != null) json.append(line);
+
+                JSONObject route =
+                        new JSONObject(json.toString())
+                                .getJSONArray("routes")
+                                .getJSONObject(0);
+
+                parseRoute(route);
+
+            } catch (Exception e) {
+                Log.e("ROUTE_ERROR", "OSRM failed", e);
+                runOnUiThread(this::openGoogleMapsFallback);
+            }
+        }).start();
+    }
+
+    private void parseRoute(JSONObject route) throws Exception {
+
+        double durationSec = route.getDouble("duration");
+        double distanceM = route.getDouble("distance");
+
+        if (distanceM <= DESTINATION_RADIUS) {
+            runOnUiThread(this::onDestinationReached);
+            return;
+        }
+
+        JSONObject geometry = route.getJSONObject("geometry");
+        org.json.JSONArray coords = geometry.getJSONArray("coordinates");
+
+        List<GeoPoint> points = new ArrayList<>();
+        for (int i = 0; i < coords.length(); i++) {
+            org.json.JSONArray c = coords.getJSONArray(i);
+            points.add(new GeoPoint(c.getDouble(1), c.getDouble(0)));
+        }
+
+        runOnUiThread(() -> {
+            drawRoute(points);
+            showETA(durationSec, distanceM);
+        });
+    }
+
+    /* ================= MAP DRAW ================= */
+
+    private void drawRoute(List<GeoPoint> points) {
+
+        if (routeLine != null) {
+            map.getOverlays().remove(routeLine);
+        }
+
+        routeLine = new Polyline();
+        routeLine.setWidth(8f);
+        routeLine.setColor(0xFF2E7D32);
+        routeLine.setPoints(points);
+
+        map.getOverlays().add(routeLine);
+        map.getOverlays().add(userMarker);
+        map.invalidate();
+    }
+
+    private void updateUserMarker(GeoPoint point) {
+
+        if (userMarker != null) {
+            map.getOverlays().remove(userMarker);
+        }
+
+        userMarker = new Marker(map);
+        userMarker.setPosition(point);
+        userMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM);
+        userMarker.setTitle("You");
+      //  userMarker.setZIndex(10f);
+        map.getOverlays().add(userMarker);
+        map.invalidate();
+    }
+
+    private void addMarker(GeoPoint point, String title) {
+        Marker m = new Marker(map);
+        m.setPosition(point);
+        m.setTitle(title);
+        map.getOverlays().add(m);
+    }
+
+    /* ================= ETA ================= */
+
+    private void showETA(double durationSec, double distanceM) {
+
+        double minutes = durationSec / 60;
+
+        lastEtaMinutes = minutes;
+
+        runOnUiThread(() ->
+        Toast.makeText(this,
+                "ETA: " + String.format("%.1f", minutes) + " mins",
+                Toast.LENGTH_SHORT).show());
+    }
+
+    private void startEtaUpdates() {
+
+        if (etaHandler != null) return;
+
+        etaHandler = new Handler(Looper.getMainLooper());
+        etaHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                fetchUserLocationAndRoute();
+                etaHandler.postDelayed(this, ETA_INTERVAL);
+            }
+        }, ETA_INTERVAL);
+    }
+
+    private void stopEtaUpdates() {
+        if (etaHandler != null) {
+            etaHandler.removeCallbacksAndMessages(null);
+            etaHandler = null;
+        }
+    }
+
+    /* ================= DESTINATION ================= */
+
+    private void onDestinationReached() {
+
+        stopEtaUpdates();
+
+        Toast.makeText(this,
+                "🎉 Destination reached",
+                Toast.LENGTH_LONG).show();
+    }
+
+    /* ================= FALLBACK ================= */
+
+    private void openGoogleMapsFallback() {
+
+        Intent intent = new Intent(Intent.ACTION_VIEW,
+                Uri.parse("google.navigation:q=" +
+                        campusLocation.getLatitude() + "," +
+                        campusLocation.getLongitude() +
+                        "&mode=w"));
+
+        intent.setPackage("com.google.android.apps.maps");
+        startActivity(intent);
+    }
+    @Override
+    public void onRequestPermissionsResult(int requestCode,
+                                           String[] permissions,
+                                           int[] grantResults) {
+
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == 101 &&
+                grantResults.length > 0 &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+
+            fetchUserLocationAndRoute();
+        }
+    }
+
 }

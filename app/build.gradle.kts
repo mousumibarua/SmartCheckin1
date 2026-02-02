@@ -49,8 +49,9 @@ dependencies {
     // 🔥 Firebase BOM (order does NOT matter, but keep it clean)
     implementation(platform("com.google.firebase:firebase-bom:33.3.0"))
     implementation("com.google.firebase:firebase-analytics")
-    implementation("com.google.firebase:firebase-crashlytics")
+    //implementation("com.google.firebase:firebase-crashlytics")
     implementation(libs.firebase.auth)
+    implementation(libs.firebase.storage)
 
     // Testing
     testImplementation(libs.junit)

@@ -16,6 +16,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
@@ -35,6 +36,16 @@ import android.view.animation.AnimationUtils;
 import com.google.firebase.analytics.FirebaseAnalytics;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.app.AlertDialog;
+import android.net.Uri;
+import android.provider.MediaStore;
+
+import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.storage.FirebaseStorage;
+import com.google.firebase.storage.StorageReference;
+
+import java.util.HashMap;
+import java.util.Map;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -56,6 +67,9 @@ public class MainActivity extends AppCompatActivity {
     private boolean alert5Shown  = false;
     private boolean violationShown = false;
     private FirebaseAnalytics firebaseAnalytics;
+    private static final int REQ_PHOTO = 501;
+    private static final int REQ_VIDEO = 502;
+    private static final int REQ_CAMERA = 200;
 
     GeoPoint campus = new GeoPoint(12.9716, 77.5946);
     @Override
@@ -121,12 +135,93 @@ public class MainActivity extends AppCompatActivity {
         btnRoute.setOnClickListener(v ->
                 startActivity(new Intent(this, RouteActivity.class)));
 
-        btnSOS.setOnClickListener(v ->
+     /*   btnSOS.setOnClickListener(v ->
                 new SOSChatDialogFragment()
-                        .show(getSupportFragmentManager(), "SOS_CHAT"));
+                        .show(getSupportFragmentManager(), "SOS_CHAT"));*/
+        btnSOS.setOnClickListener(v -> showSosMediaChoice());
 
         setupMap();
         updateUI();
+    }
+    private void showSosMediaChoice() {
+
+        String[] options = {"📸 Take Photo", "🎥 Record Video", "Skip"};
+
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Add media to SOS?")
+                .setItems(options, (dialog, which) -> {
+
+                    if (which == 0) {
+                        if (ensureCameraPermission()) {
+                            openCameraPhoto();
+                        }
+                    } else if (which == 1) {
+                        if (ensureCameraPermission()) {
+                            openCameraVideo();
+                        }
+                    } else {
+                        openSosChat();
+                    }
+                })
+                .setCancelable(true)
+                .show();
+    }
+    private void openCameraPhoto() {
+        Intent intent = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
+        startActivityForResult(intent, REQ_PHOTO);
+    }
+    private void openCameraVideo() {
+        Intent intent = new Intent(android.provider.MediaStore.ACTION_VIDEO_CAPTURE);
+        intent.putExtra(android.provider.MediaStore.EXTRA_DURATION_LIMIT, 15);
+        startActivityForResult(intent, REQ_VIDEO);
+    }
+    private void openSosChat() {
+        new SOSChatDialogFragment()
+                .show(getSupportFragmentManager(), "SOS_CHAT");
+    }
+
+    private boolean ensureCameraPermission() {
+        if (ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.CAMERA
+        ) != PackageManager.PERMISSION_GRANTED) {
+
+            ActivityCompat.requestPermissions(
+                    this,
+                    new String[]{android.Manifest.permission.CAMERA},
+                    REQ_CAMERA
+            );
+            return false;
+        }
+        return true;
+    }
+    private void showSosMediaDialog() {
+
+        new AlertDialog.Builder(this)
+                .setTitle("🚨 SOS Alert")
+                .setMessage("Do you want to add a photo or video?")
+                .setPositiveButton("Yes", (d, w) -> showMediaOptions())
+                .setNegativeButton("No", (d, w) -> sendSosWithoutMedia())
+                .show();
+    }
+    private void showMediaOptions() {
+
+        String[] options = {"Take Photo", "Record Video"};
+
+        new AlertDialog.Builder(this)
+                .setTitle("Add Media")
+                .setItems(options, (dialog, which) -> {
+
+                    if (which == 0) {
+                        Intent photoIntent =
+                                new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+                        startActivityForResult(photoIntent, REQ_PHOTO);
+                    } else {
+                        Intent videoIntent =
+                                new Intent(MediaStore.ACTION_VIDEO_CAPTURE);
+                        startActivityForResult(videoIntent, REQ_VIDEO);
+                    }
+                })
+                .show();
     }
 
     /* ================= MAP ================= */
@@ -367,4 +462,75 @@ public class MainActivity extends AppCompatActivity {
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
         startActivity(intent);
     }
+
+    private void uploadMediaAndSendSos(Uri uri) {
+
+        Toast.makeText(this, "Uploading media...", Toast.LENGTH_SHORT).show();
+
+        FirebaseStorage storage = FirebaseStorage.getInstance();
+        StorageReference ref =
+                storage.getReference("sos_media/" + System.currentTimeMillis());
+
+        ref.putFile(uri)
+                .continueWithTask(task -> ref.getDownloadUrl())
+                .addOnSuccessListener(downloadUri ->
+                        sendSosWithMedia(downloadUri.toString()))
+                .addOnFailureListener(e ->
+                        Toast.makeText(this,
+                                "Upload failed",
+                                Toast.LENGTH_SHORT).show());
+    }
+    private void sendSosWithoutMedia() {
+
+        Toast.makeText(this,
+                "SOS sent without media",
+                Toast.LENGTH_SHORT).show();
+
+        // Optional: keep your SOS chat fragment
+        new SOSChatDialogFragment()
+                .show(getSupportFragmentManager(), "SOS_CHAT");
+    }
+    private void sendSosWithMedia(String mediaUrl) {
+
+        FirebaseFirestore db = FirebaseFirestore.getInstance();
+
+        Map<String, Object> sos = new HashMap<>();
+        sos.put("mediaUrl", mediaUrl);
+        sos.put("time", System.currentTimeMillis());
+        sos.put("type", "media_sos");
+
+        db.collection("sos_alerts")
+                .add(sos)
+                .addOnSuccessListener(unused ->
+                        Toast.makeText(this,
+                                "SOS sent with media",
+                                Toast.LENGTH_SHORT).show())
+                .addOnFailureListener(e ->
+                        Toast.makeText(this,
+                                "Failed to send SOS",
+                                Toast.LENGTH_SHORT).show());
+    }
+
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        // If user cancelled camera → still open SOS chat
+        if (resultCode != RESULT_OK) {
+            openSosChat();
+            return;
+        }
+
+        // Photo or video captured
+        if (requestCode == REQ_PHOTO || requestCode == REQ_VIDEO) {
+
+            // Optional: you can process / upload media here later
+
+            // ✅ ALWAYS open SOS chat after returning
+            openSosChat();
+        }
+    }
+
+
 }
