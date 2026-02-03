@@ -1,20 +1,26 @@
 package com.example.smartcheckin;
 
+import android.Manifest;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.location.Location;
+import android.location.LocationManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.telephony.SmsManager;
 import android.text.format.DateFormat;
+import android.view.Menu;
+import android.view.MenuItem;
 import android.view.View;
-import android.widget.Button;
-import android.widget.LinearLayout;
-import android.widget.TextView;
-import android.widget.Toast;
+import android.widget.*;
 
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
@@ -33,61 +39,63 @@ import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay;
 import android.graphics.drawable.GradientDrawable;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
+
 import com.google.firebase.analytics.FirebaseAnalytics;
-import android.view.Menu;
-import android.view.MenuItem;
-import android.app.AlertDialog;
-import android.net.Uri;
-import android.provider.MediaStore;
-
-import com.google.firebase.firestore.FirebaseFirestore;
-import com.google.firebase.storage.FirebaseStorage;
-import com.google.firebase.storage.StorageReference;
-
-import java.util.HashMap;
-import java.util.Map;
 
 public class MainActivity extends AppCompatActivity {
 
+    /* ================= CONSTANTS ================= */
+
     private static final String CHANNEL_ID = "checkin_alerts";
+    private static final int REQ_CAMERA = 100;
+    private static final int REQ_PHOTO = 101;
+    private static final int REQ_VIDEO = 102;
+    private static final int REQ_SOS_PERMS = 200;
 
-    MapView map;
-    MyLocationNewOverlay locationOverlay;
+    private static final String EMERGENCY_NUMBER = "+919845115334";
 
-    Button btnCheckout, btnCheckin, btnSOS, btnRoute;
-    TextView txtStatus, txtCheckoutTime, txtCountdown;
-    LinearLayout layoutCountdown;
+    /* ================= MAP ================= */
+
+    private MapView map;
+    private MyLocationNewOverlay locationOverlay;
+    private final GeoPoint campus = new GeoPoint(12.9716, 77.5946);
+
+    /* ================= UI ================= */
+
+    private Button btnCheckout, btnCheckin, btnSOS, btnRoute;
+    private TextView txtStatus, txtCheckoutTime, txtCountdown;
+    private LinearLayout layoutCountdown;
+
+    /* ================= STATE ================= */
 
     private final Handler countdownHandler = new Handler(Looper.getMainLooper());
     private Runnable countdownRunnable;
     private Animation pulseAnim;
 
-    private boolean alert15Shown = false;
-    private boolean alert10Shown = false;
-    private boolean alert5Shown  = false;
-    private boolean violationShown = false;
-    private FirebaseAnalytics firebaseAnalytics;
-    private static final int REQ_PHOTO = 501;
-    private static final int REQ_VIDEO = 502;
-    private static final int REQ_CAMERA = 200;
+    private boolean alert15Shown, alert10Shown, alert5Shown, violationShown;
 
-    GeoPoint campus = new GeoPoint(12.9716, 77.5946);
+    private FirebaseAnalytics firebaseAnalytics;
+
+    // 🔥 SOS
+    private String pendingSosReason;
+
+    /* ================= MENU ================= */
+
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         getMenuInflater().inflate(R.menu.main_menu, menu);
         return true;
     }
+
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
 
-        int id = item.getItemId();
-
-        if (id == R.id.menu_logout) {
+        if (item.getItemId() == R.id.menu_logout) {
             logoutUser();
             return true;
         }
 
-        if (id == R.id.menu_deregister) {
+        if (item.getItemId() == R.id.menu_deregister) {
             deregisterUser();
             return true;
         }
@@ -95,17 +103,16 @@ public class MainActivity extends AppCompatActivity {
         return super.onOptionsItemSelected(item);
     }
 
+    /* ================= LIFECYCLE ================= */
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
         createNotificationChannel();
-        firebaseAnalytics = FirebaseAnalytics.getInstance(this);
-        Bundle bundle = new Bundle();
-        bundle.putString("screen", "MainActivity");
-        firebaseAnalytics.logEvent("app_opened", bundle);
 
+        firebaseAnalytics = FirebaseAnalytics.getInstance(this);
 
         txtStatus = findViewById(R.id.txtStatus);
         txtCheckoutTime = findViewById(R.id.txtCheckoutTime);
@@ -120,108 +127,189 @@ public class MainActivity extends AppCompatActivity {
         pulseAnim = AnimationUtils.loadAnimation(this, R.anim.pulse);
 
         btnCheckout.setOnClickListener(v -> startCheckoutFlow());
-
-        btnCheckin.setOnClickListener(v -> {
-            Utils.setCheckedOut(this, false);
-            resetAlerts();
-            updateUI();
-           // Bundle bundle = new Bundle();
-            bundle.putString("action", "checkin");
-            firebaseAnalytics.logEvent("user_checkin", bundle);
-
-            Toast.makeText(this, "Checked in successfully!", Toast.LENGTH_SHORT).show();
-        });
-
+        btnCheckin.setOnClickListener(v -> handleCheckIn());
         btnRoute.setOnClickListener(v ->
                 startActivity(new Intent(this, RouteActivity.class)));
 
-     /*   btnSOS.setOnClickListener(v ->
-                new SOSChatDialogFragment()
-                        .show(getSupportFragmentManager(), "SOS_CHAT"));*/
+        // 🔥 SOS ENTRY POINT
         btnSOS.setOnClickListener(v -> showSosMediaChoice());
 
         setupMap();
         updateUI();
     }
+    private String getCurrentLocationUrl() {
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION
+        ) != PackageManager.PERMISSION_GRANTED) {
+
+            return "Location permission not granted";
+        }
+
+        LocationManager lm =
+                (LocationManager) getSystemService(LOCATION_SERVICE);
+
+        if (lm == null) return "Location unavailable";
+
+        Location location = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+
+        if (location == null) {
+            return "Location unavailable";
+        }
+
+        return "https://www.openstreetmap.org/?mlat="
+                + location.getLatitude()
+                + "&mlon="
+                + location.getLongitude();
+    }
+
+    /* ================= SOS FLOW ================= */
+
+    private boolean ensureSosPermissions() {
+
+        boolean smsGranted =
+                ContextCompat.checkSelfPermission(this,
+                        Manifest.permission.SEND_SMS)
+                        == PackageManager.PERMISSION_GRANTED;
+
+        boolean locGranted =
+                ContextCompat.checkSelfPermission(this,
+                        Manifest.permission.ACCESS_FINE_LOCATION)
+                        == PackageManager.PERMISSION_GRANTED;
+
+        if (smsGranted && locGranted) return true;
+
+        ActivityCompat.requestPermissions(
+                this,
+                new String[]{
+                        Manifest.permission.SEND_SMS,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                },
+                REQ_SOS_PERMS
+        );
+
+        return false;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(
+            int requestCode,
+            @NonNull String[] permissions,
+            @NonNull int[] grantResults
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == REQ_SOS_PERMS) {
+            if (allGranted(grantResults)) {
+                sendSos();
+            } else {
+                toast("SMS & location permission required for SOS");
+            }
+        }
+    }
+
+    private void sendSos() {
+
+        String locationText = "Location unavailable";
+
+        try {
+            LocationManager lm =
+                    (LocationManager) getSystemService(LOCATION_SERVICE);
+
+            if (lm != null &&
+                    ActivityCompat.checkSelfPermission(
+                            this,
+                            Manifest.permission.ACCESS_FINE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED) {
+
+                Location loc =
+                        lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+
+                if (loc != null) {
+                    locationText =
+                            "https://www.openstreetmap.org/?mlat="
+                                    + loc.getLatitude()
+                                    + "&mlon=" + loc.getLongitude();
+                }
+            }
+        } catch (Exception ignored) {}
+
+        String sms =
+                "🚨 SOS ALERT\n" +
+                        "Reason: " + pendingSosReason +
+                        "\nLocation:\n" + locationText;
+
+        startActivity(new Intent(
+                Intent.ACTION_DIAL,
+                Uri.parse("tel:" + EMERGENCY_NUMBER)
+        ));
+
+        try {
+            SmsManager.getDefault().sendTextMessage(
+                    EMERGENCY_NUMBER,
+                    null,
+                    sms,
+                    null,
+                    null
+            );
+        } catch (Exception e) {
+            toast("Failed to send SMS");
+        }
+
+        toast("🚨 SOS sent successfully");
+    }
+
+    /* ================= MEDIA ================= */
+
     private void showSosMediaChoice() {
 
         String[] options = {"📸 Take Photo", "🎥 Record Video", "Skip"};
 
-        new androidx.appcompat.app.AlertDialog.Builder(this)
+        new AlertDialog.Builder(this)
                 .setTitle("Add media to SOS?")
-                .setItems(options, (dialog, which) -> {
-
-                    if (which == 0) {
-                        if (ensureCameraPermission()) {
-                            openCameraPhoto();
-                        }
-                    } else if (which == 1) {
-                        if (ensureCameraPermission()) {
-                            openCameraVideo();
-                        }
+                .setItems(options, (d, which) -> {
+                    if (which == 0 && ensureCameraPermission()) {
+                        startActivityForResult(
+                                new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE),
+                                REQ_PHOTO
+                        );
+                    } else if (which == 1 && ensureCameraPermission()) {
+                        startActivityForResult(
+                                new Intent(android.provider.MediaStore.ACTION_VIDEO_CAPTURE),
+                                REQ_VIDEO
+                        );
                     } else {
                         openSosChat();
                     }
                 })
-                .setCancelable(true)
                 .show();
-    }
-    private void openCameraPhoto() {
-        Intent intent = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
-        startActivityForResult(intent, REQ_PHOTO);
-    }
-    private void openCameraVideo() {
-        Intent intent = new Intent(android.provider.MediaStore.ACTION_VIDEO_CAPTURE);
-        intent.putExtra(android.provider.MediaStore.EXTRA_DURATION_LIMIT, 15);
-        startActivityForResult(intent, REQ_VIDEO);
-    }
-    private void openSosChat() {
-        new SOSChatDialogFragment()
-                .show(getSupportFragmentManager(), "SOS_CHAT");
     }
 
     private boolean ensureCameraPermission() {
-        if (ContextCompat.checkSelfPermission(
-                this, android.Manifest.permission.CAMERA
-        ) != PackageManager.PERMISSION_GRANTED) {
+        if (ContextCompat.checkSelfPermission(this,
+                Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED) return true;
 
-            ActivityCompat.requestPermissions(
-                    this,
-                    new String[]{android.Manifest.permission.CAMERA},
-                    REQ_CAMERA
-            );
-            return false;
-        }
-        return true;
+        ActivityCompat.requestPermissions(
+                this,
+                new String[]{Manifest.permission.CAMERA},
+                REQ_CAMERA
+        );
+        return false;
     }
-    private void showSosMediaDialog() {
 
-        new AlertDialog.Builder(this)
-                .setTitle("🚨 SOS Alert")
-                .setMessage("Do you want to add a photo or video?")
-                .setPositiveButton("Yes", (d, w) -> showMediaOptions())
-                .setNegativeButton("No", (d, w) -> sendSosWithoutMedia())
-                .show();
+    @Override
+    protected void onActivityResult(
+            int requestCode, int resultCode, Intent data
+    ) {
+        super.onActivityResult(requestCode, resultCode, data);
+        openSosChat(); // always return to SOS chat
     }
-    private void showMediaOptions() {
 
-        String[] options = {"Take Photo", "Record Video"};
-
-        new AlertDialog.Builder(this)
-                .setTitle("Add Media")
-                .setItems(options, (dialog, which) -> {
-
-                    if (which == 0) {
-                        Intent photoIntent =
-                                new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-                        startActivityForResult(photoIntent, REQ_PHOTO);
-                    } else {
-                        Intent videoIntent =
-                                new Intent(MediaStore.ACTION_VIDEO_CAPTURE);
-                        startActivityForResult(videoIntent, REQ_VIDEO);
-                    }
-                })
-                .show();
+    private void openSosChat() {
+        new SOSChatDialogFragment()
+                .show(getSupportFragmentManager(), "SOS_CHAT");
     }
 
     /* ================= MAP ================= */
@@ -232,12 +320,12 @@ public class MainActivity extends AppCompatActivity {
         map.setTileSource(TileSourceFactory.MAPNIK);
         map.setMultiTouchControls(true);
 
-        locationOverlay = new MyLocationNewOverlay(
-                new GpsMyLocationProvider(this), map);
+        locationOverlay =
+                new MyLocationNewOverlay(new GpsMyLocationProvider(this), map);
         locationOverlay.enableMyLocation();
         map.getOverlays().add(locationOverlay);
 
-        map.getController().setZoom(5.0);
+        map.getController().setZoom(15.0);
         map.getController().setCenter(campus);
 
         Marker marker = new Marker(map);
@@ -248,42 +336,33 @@ public class MainActivity extends AppCompatActivity {
         drawGeofence(campus, 300);
     }
 
-    /* ================= CHECKOUT ================= */
+    /* ================= CHECK-IN ================= */
 
     private void startCheckoutFlow() {
         Utils.setCheckedOut(this, true);
         resetAlerts();
         updateUI();
-        Toast.makeText(this, "Checked out! Monitoring started.", Toast.LENGTH_SHORT).show();
-        Bundle bundle = new Bundle();
-        bundle.putString("action", "checkout");
-        firebaseAnalytics.logEvent("user_checkout", bundle);
+        toast("Checked out! Monitoring started.");
+    }
 
+    private void handleCheckIn() {
+        Utils.setCheckedOut(this, false);
+        resetAlerts();
+        updateUI();
+        toast("Checked in successfully!");
     }
 
     private void resetAlerts() {
         alert15Shown = alert10Shown = alert5Shown = violationShown = false;
     }
 
-    /* ================= UI ================= */
-
     private void updateUI() {
-
         long checkoutTime = Utils.getCheckoutTime(this);
 
         if (Utils.isCheckedOut(this)) {
-
-            long deadlineMs = checkoutTime + (15 * 60 * 1000);
-
-            if (System.currentTimeMillis() > deadlineMs) {
-                txtStatus.setText("You are checked out, deadline lapsed!!");
-            } else {
-                txtStatus.setText("You are checked out");
-            }
-
+            txtStatus.setText("You are checked out");
             txtStatus.setTextColor(
-                    ContextCompat.getColor(this, android.R.color.holo_red_dark)
-            );
+                    ContextCompat.getColor(this, android.R.color.holo_red_dark));
 
             txtCheckoutTime.setText(
                     "Checked out at " +
@@ -295,9 +374,7 @@ public class MainActivity extends AppCompatActivity {
             btnRoute.setEnabled(true);
 
             startCountdown();
-
         } else {
-
             txtStatus.setText("You are checked in");
             txtStatus.setTextColor(
                     ContextCompat.getColor(this, android.R.color.holo_green_dark));
@@ -313,33 +390,19 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /* ================= COUNTDOWN ================= */
-
+    /* ================= HELPERS ================= */
     private void startCountdown() {
 
         countdownHandler.removeCallbacksAndMessages(null);
 
         long checkoutTime = Utils.getCheckoutTime(this);
-        long deadline = checkoutTime + (15 * 60 * 1000);
+        long deadline = checkoutTime + (15 * 60 * 1000); // 15 minutes
 
         countdownRunnable = () -> {
 
             long remaining = deadline - System.currentTimeMillis();
 
             if (remaining <= 0) {
-                if (!violationShown) {
-                    violationShown = true;
-                    Bundle bundle = new Bundle();
-                    bundle.putString("violation", "checkout_deadline");
-                    firebaseAnalytics.logEvent("deadline_violated", bundle);
-                    showNotification(
-                            104,
-                            "Check-in Deadline Violated",
-                            "❌ Deadline violated on " +
-                                    DateFormat.format("dd MMM yyyy, hh:mm a",
-                                            new java.util.Date())
-                    );
-                }
                 layoutCountdown.setVisibility(View.GONE);
                 return;
             }
@@ -354,29 +417,11 @@ public class MainActivity extends AppCompatActivity {
                     (GradientDrawable) layoutCountdown.getBackground();
 
             if (remaining > 10 * 60 * 1000) {
-                bg.setColor(0xFF2E7D32);
-                if (!alert15Shown) {
-                    alert15Shown = true;
-                    showNotification(101,
-                            "Check-in Reminder",
-                            "🟢 15 minutes left to check in");
-                }
+                bg.setColor(0xFF2E7D32); // green
             } else if (remaining > 5 * 60 * 1000) {
-                bg.setColor(0xFFF9A825);
-                if (!alert10Shown) {
-                    alert10Shown = true;
-                    showNotification(102,
-                            "Check-in Warning",
-                            "🟡 10 minutes left to check in");
-                }
+                bg.setColor(0xFFF9A825); // yellow
             } else {
-                bg.setColor(0xFFC62828);
-                if (!alert5Shown) {
-                    alert5Shown = true;
-                    showNotification(103,
-                            "Urgent Check-in",
-                            "🔴 Only 5 minutes left!");
-                }
+                bg.setColor(0xFFC62828); // red
                 if (txtCountdown.getAnimation() == null) {
                     txtCountdown.startAnimation(pulseAnim);
                 }
@@ -387,46 +432,38 @@ public class MainActivity extends AppCompatActivity {
 
         countdownHandler.post(countdownRunnable);
     }
+    private void sendSosViaSmsApp(String message) {
 
-    /* ================= NOTIFICATIONS ================= */
+        Intent intent = new Intent(Intent.ACTION_SENDTO);
+        intent.setData(Uri.parse("smsto:" + EMERGENCY_NUMBER));
+        intent.putExtra("sms_body", message);
 
-    private void showNotification(int id, String title, String msg) {
-        NotificationCompat.Builder builder =
-                new NotificationCompat.Builder(this, CHANNEL_ID)
-                        .setSmallIcon(android.R.drawable.ic_dialog_alert)
-                        .setContentTitle(title)
-                        .setContentText(msg)
-                        .setStyle(new NotificationCompat.BigTextStyle().bigText(msg))
-                        .setPriority(NotificationCompat.PRIORITY_HIGH)
-                        .setAutoCancel(true);
+        startActivity(intent);
+    }
+    public void onSendSosClicked(String reason) {
 
-        NotificationManagerCompat nm = NotificationManagerCompat.from(this);
+        if (!ensureSosPermissions()) return;
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-                ContextCompat.checkSelfPermission(
-                        this,
-                        android.Manifest.permission.POST_NOTIFICATIONS
-                ) == PackageManager.PERMISSION_GRANTED) {
+        String locationUrl = getCurrentLocationUrl(); // your existing method
 
-            nm.notify(id, builder.build());
-        }
+        String message =
+                "🚨 SOS ALERT\n" +
+                        "Reason: " + reason + "\n" +
+                        "Location: " + locationUrl;
+
+        sendSosViaSmsApp(message);
     }
 
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID,
-                    "Check-in Alerts",
-                    NotificationManager.IMPORTANCE_HIGH
-            );
-            getSystemService(NotificationManager.class)
-                    .createNotificationChannel(channel);
-        }
+    private boolean allGranted(int[] results) {
+        for (int r : results) if (r != PackageManager.PERMISSION_GRANTED) return false;
+        return true;
     }
 
-    /* ================= GEOFENCE ================= */
+    private void toast(String msg) {
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+    }
 
-    void drawGeofence(GeoPoint center, int radiusMeters) {
+    private void drawGeofence(GeoPoint center, int radiusMeters) {
         Polygon circle = new Polygon();
         circle.setPoints(Polygon.pointsAsCircle(center, radiusMeters));
         circle.setFillColor(0x121111FF);
@@ -434,103 +471,31 @@ public class MainActivity extends AppCompatActivity {
         circle.setStrokeWidth(3f);
         map.getOverlays().add(circle);
     }
-    private void deregisterUser() {
 
-        // 1️⃣ Clear SharedPreferences
-        getSharedPreferences("SmartCheckinPrefs", MODE_PRIVATE)
-                .edit()
-                .clear()
-                .apply();
-
-        // 2️⃣ Optional: Firebase sign out (safe even if not used)
-        try {
-            com.google.firebase.auth.FirebaseAuth.getInstance().signOut();
-        } catch (Exception ignored) {}
-
-        // 3️⃣ Go back to Register screen
-        Intent intent = new Intent(this, RegisterActivity.class);
-        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-        startActivity(intent);
-
-        finish();
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel =
+                    new NotificationChannel(
+                            CHANNEL_ID,
+                            "Check-in Alerts",
+                            NotificationManager.IMPORTANCE_HIGH);
+            getSystemService(NotificationManager.class)
+                    .createNotificationChannel(channel);
+        }
     }
+
     private void logoutUser() {
-
-        Toast.makeText(this, "Logged out", Toast.LENGTH_SHORT).show();
-
-        Intent intent = new Intent(this, LockActivity.class);
-        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-        startActivity(intent);
+        startActivity(new Intent(this, LockActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        | Intent.FLAG_ACTIVITY_NEW_TASK));
     }
 
-    private void uploadMediaAndSendSos(Uri uri) {
+    private void deregisterUser() {
+        getSharedPreferences("SmartCheckinPrefs", MODE_PRIVATE)
+                .edit().clear().apply();
 
-        Toast.makeText(this, "Uploading media...", Toast.LENGTH_SHORT).show();
-
-        FirebaseStorage storage = FirebaseStorage.getInstance();
-        StorageReference ref =
-                storage.getReference("sos_media/" + System.currentTimeMillis());
-
-        ref.putFile(uri)
-                .continueWithTask(task -> ref.getDownloadUrl())
-                .addOnSuccessListener(downloadUri ->
-                        sendSosWithMedia(downloadUri.toString()))
-                .addOnFailureListener(e ->
-                        Toast.makeText(this,
-                                "Upload failed",
-                                Toast.LENGTH_SHORT).show());
+        startActivity(new Intent(this, RegisterActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        | Intent.FLAG_ACTIVITY_NEW_TASK));
     }
-    private void sendSosWithoutMedia() {
-
-        Toast.makeText(this,
-                "SOS sent without media",
-                Toast.LENGTH_SHORT).show();
-
-        // Optional: keep your SOS chat fragment
-        new SOSChatDialogFragment()
-                .show(getSupportFragmentManager(), "SOS_CHAT");
-    }
-    private void sendSosWithMedia(String mediaUrl) {
-
-        FirebaseFirestore db = FirebaseFirestore.getInstance();
-
-        Map<String, Object> sos = new HashMap<>();
-        sos.put("mediaUrl", mediaUrl);
-        sos.put("time", System.currentTimeMillis());
-        sos.put("type", "media_sos");
-
-        db.collection("sos_alerts")
-                .add(sos)
-                .addOnSuccessListener(unused ->
-                        Toast.makeText(this,
-                                "SOS sent with media",
-                                Toast.LENGTH_SHORT).show())
-                .addOnFailureListener(e ->
-                        Toast.makeText(this,
-                                "Failed to send SOS",
-                                Toast.LENGTH_SHORT).show());
-    }
-
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-
-        // If user cancelled camera → still open SOS chat
-        if (resultCode != RESULT_OK) {
-            openSosChat();
-            return;
-        }
-
-        // Photo or video captured
-        if (requestCode == REQ_PHOTO || requestCode == REQ_VIDEO) {
-
-            // Optional: you can process / upload media here later
-
-            // ✅ ALWAYS open SOS chat after returning
-            openSosChat();
-        }
-    }
-
-
 }
