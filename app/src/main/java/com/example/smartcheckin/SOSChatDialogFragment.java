@@ -70,7 +70,6 @@ public class SOSChatDialogFragment extends DialogFragment {
     }
 
     /* ---------- SEND HANDLER ---------- */
-
     private void handleSend() {
 
         String input = edtMessage.getText().toString().trim();
@@ -95,12 +94,13 @@ public class SOSChatDialogFragment extends DialogFragment {
         addUserMessage(reason);
         addBotMessage("Emergency recorded. Contacting help now.");
 
-        // 🔥 DELEGATE SOS ACTION TO MAIN ACTIVITY
-        if (getActivity() instanceof MainActivity) {
+        // ✅ ONLY DELEGATE — NOTHING ELSE
+        if (isAdded() && getActivity() instanceof MainActivity) {
             ((MainActivity) getActivity()).onSendSosClicked(reason);
         }
 
         edtMessage.setText("");
+        dismiss();
     }
 
     /* ---------- CHAT UI ---------- */

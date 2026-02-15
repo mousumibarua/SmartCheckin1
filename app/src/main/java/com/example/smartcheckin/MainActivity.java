@@ -1,501 +1,787 @@
 package com.example.smartcheckin;
 
+import static com.example.smartcheckin.VoiceEngine.speak;
+
 import android.Manifest;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.location.Location;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraManager;
 import android.location.LocationManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.telephony.SmsManager;
+import android.speech.RecognizerIntent;
 import android.text.format.DateFormat;
-import android.view.Menu;
-import android.view.MenuItem;
+import android.util.Log;
 import android.view.View;
-import android.widget.*;
+import android.widget.Button;
+import android.widget.TextView;
+import android.widget.Toast;
 
-import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
-import androidx.core.app.NotificationCompat;
-import androidx.core.app.NotificationManagerCompat;
-import androidx.core.content.ContextCompat;
 
 import org.osmdroid.config.Configuration;
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory;
 import org.osmdroid.util.GeoPoint;
 import org.osmdroid.views.MapView;
-import org.osmdroid.views.overlay.Marker;
-import org.osmdroid.views.overlay.Polygon;
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider;
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay;
 
-import android.graphics.drawable.GradientDrawable;
-import android.view.animation.Animation;
-import android.view.animation.AnimationUtils;
+import java.util.ArrayList;
+import java.util.List;
+import android.speech.tts.TextToSpeech;
+import android.os.Vibrator;
+import android.os.VibrationEffect;
+import java.util.Locale;
+import android.provider.Settings;
+import android.speech.tts.UtteranceProgressListener;
 
-import com.google.firebase.analytics.FirebaseAnalytics;
 
 public class MainActivity extends AppCompatActivity {
 
-    /* ================= CONSTANTS ================= */
-
-    private static final String CHANNEL_ID = "checkin_alerts";
-    private static final int REQ_CAMERA = 100;
-    private static final int REQ_PHOTO = 101;
-    private static final int REQ_VIDEO = 102;
-    private static final int REQ_SOS_PERMS = 200;
-
-    private static final String EMERGENCY_NUMBER = "+919845115334";
-
     /* ================= MAP ================= */
-
     private MapView map;
-    private MyLocationNewOverlay locationOverlay;
-    private final GeoPoint campus = new GeoPoint(12.9716, 77.5946);
+    private MyLocationNewOverlay myLocationOverlay;   // 👤 ADDED
+    private TextView txtStatus;
+    private Button btnRoute;
 
-    /* ================= UI ================= */
+    /* ================= CAMPUS POLYGON ================= */
+    private final List<GeoPoint> campusPolygon = new ArrayList<>();
 
-    private Button btnCheckout, btnCheckin, btnSOS, btnRoute;
-    private TextView txtStatus, txtCheckoutTime, txtCountdown;
-    private LinearLayout layoutCountdown;
+    /* ================= SERVICES ================= */
+    private LocationService locationService;
+    private LocationManager locationManager;
+    private static final int REQ_CAMERA = 201;
 
-    /* ================= STATE ================= */
-
-    private final Handler countdownHandler = new Handler(Looper.getMainLooper());
-    private Runnable countdownRunnable;
-    private Animation pulseAnim;
-
-    private boolean alert15Shown, alert10Shown, alert5Shown, violationShown;
-
-    private FirebaseAnalytics firebaseAnalytics;
-
-    // 🔥 SOS
-    private String pendingSosReason;
-
-    /* ================= MENU ================= */
-
-    @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        getMenuInflater().inflate(R.menu.main_menu, menu);
-        return true;
-    }
-
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-
-        if (item.getItemId() == R.id.menu_logout) {
-            logoutUser();
-            return true;
-        }
-
-        if (item.getItemId() == R.id.menu_deregister) {
-            deregisterUser();
-            return true;
-        }
-
-        return super.onOptionsItemSelected(item);
-    }
-
-    /* ================= LIFECYCLE ================= */
+    /* ================= CAMERA DARKNESS ================= */
+    private CameraLightDetector cameraLightDetector;
+    private String lastStatusText = "";
+    private enum StatusType { CHECKED_IN, CHECKED_OUT, OUTSIDE }
+    private StatusType currentStatus = StatusType.OUTSIDE;
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private TextToSpeech tts;
+    private Vibrator vibrator;
+    private boolean ttsReady = false;
+    private boolean permissionRequested  = false;
+    private int permissionAttempts = 0;
+    private static final int MAX_ATTEMPTS = 3;
+    private boolean voiceModeEnabled = false;
+    private AlertDialog profileDialog;
+    private boolean awaitingNavigationResponse = false;
+    private Handler responseHandler = new Handler(Looper.getMainLooper());
+    private boolean profileCompleted = false;
+    private boolean awaitingProfileResponse = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        // ✅ Initialize TTS FIRST
 
-        createNotificationChannel();
+        tts = new TextToSpeech(this, status -> {
 
-        firebaseAnalytics = FirebaseAnalytics.getInstance(this);
+            ttsReady = true;
+
+            tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+
+                @Override public void onStart(String id) {}
+
+                @Override
+                public void onDone(String id) {
+
+                    runOnUiThread(() -> {
+
+                        switch (id) {
+
+                            case "WELCOME_MSG":
+                                requestLocationPermission();
+                                break;
+
+                            case "PROFILE_MSG":
+                                showProfileDialog();
+                                new Handler(Looper.getMainLooper()).postDelayed(
+                                        () -> startVoiceSelection(),
+                                        1200
+                                );
+                                break;
+
+                            case "NAV_PROMPT":
+                                startVoiceSelection();
+                                break;
+
+                            case "OUTSIDE_MSG":
+                                askNavigationAfterDelay();
+                                break;
+                        }
+                    });
+                }
+
+                @Override public void onError(String id) {}
+            });
+
+            if (AppSettings.isFirstLaunch(MainActivity.this)) {
+
+                tts.speak(
+                        "Welcome to Smart Check-in. Location permission is required. After this message, the permission screen will open. Please press Allow.",
+                        TextToSpeech.QUEUE_FLUSH,
+                        null,
+                        "WELCOME_MSG"
+                );
+
+            } else {
+                requestLocationPermission();
+            }
+        });
+
+
+
+        Configuration.getInstance().load(
+                getApplicationContext(),
+                getSharedPreferences("osmdroid", MODE_PRIVATE)
+        );
+        Configuration.getInstance().setUserAgentValue(getPackageName());
+
+        setupPreviewMap();
 
         txtStatus = findViewById(R.id.txtStatus);
-        txtCheckoutTime = findViewById(R.id.txtCheckoutTime);
-        txtCountdown = findViewById(R.id.txtCountdown);
-        layoutCountdown = findViewById(R.id.layoutCountdown);
-
-        btnCheckout = findViewById(R.id.btnCheckout);
-        btnCheckin = findViewById(R.id.btnCheckin);
-        btnSOS = findViewById(R.id.btnSOS);
         btnRoute = findViewById(R.id.btnRoute);
 
-        pulseAnim = AnimationUtils.loadAnimation(this, R.anim.pulse);
+        btnRoute.setOnClickListener(v -> {
+            Intent intent = new Intent(MainActivity.this, MapActivity.class);
+            startActivity(intent);
+        });
 
-        btnCheckout.setOnClickListener(v -> startCheckoutFlow());
-        btnCheckin.setOnClickListener(v -> handleCheckIn());
-        btnRoute.setOnClickListener(v ->
-                startActivity(new Intent(this, RouteActivity.class)));
+        // 🚫 DO NOT start location yet (permission not granted)
+        // initLocationService();
+        // startLocationUpdates();
 
-        // 🔥 SOS ENTRY POINT
-        btnSOS.setOnClickListener(v -> showSosMediaChoice());
-
-        setupMap();
-        updateUI();
+        showInitialOutsideStatus();
     }
-    private String getCurrentLocationUrl() {
 
-        if (ContextCompat.checkSelfPermission(
+    private void startFirstLaunchFlow() {
+
+        if (!ttsReady) return;
+
+        if (AppSettings.isFirstLaunch(this)) {
+
+            tts.speak(
+                    "Welcome to Smart Check-in. Location permission is required. " +
+                            "After this message, the permission screen will open. Please press Allow.",
+                    TextToSpeech.QUEUE_FLUSH,
+                    null,
+                    "WELCOME_MSG"
+            );
+
+        } else {
+            requestLocationPermission();
+        }
+    }
+
+
+    private void requestLocationPermission() {
+        //  if (permissionRequested) return;   // ✅ PREVENT DOUBLE CALL
+
+        //   permissionRequested = true;
+
+        if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.ACCESS_FINE_LOCATION
-        ) != PackageManager.PERMISSION_GRANTED) {
-
-            return "Location permission not granted";
+        ) == PackageManager.PERMISSION_GRANTED) {
+            enableLocationFeatures();
+            return;
         }
-
-        LocationManager lm =
-                (LocationManager) getSystemService(LOCATION_SERVICE);
-
-        if (lm == null) return "Location unavailable";
-
-        Location location = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-
-        if (location == null) {
-            return "Location unavailable";
-        }
-
-        return "https://www.openstreetmap.org/?mlat="
-                + location.getLatitude()
-                + "&mlon="
-                + location.getLongitude();
-    }
-
-    /* ================= SOS FLOW ================= */
-
-    private boolean ensureSosPermissions() {
-
-        boolean smsGranted =
-                ContextCompat.checkSelfPermission(this,
-                        Manifest.permission.SEND_SMS)
-                        == PackageManager.PERMISSION_GRANTED;
-
-        boolean locGranted =
-                ContextCompat.checkSelfPermission(this,
-                        Manifest.permission.ACCESS_FINE_LOCATION)
-                        == PackageManager.PERMISSION_GRANTED;
-
-        if (smsGranted && locGranted) return true;
 
         ActivityCompat.requestPermissions(
                 this,
-                new String[]{
-                        Manifest.permission.SEND_SMS,
-                        Manifest.permission.ACCESS_FINE_LOCATION
-                },
-                REQ_SOS_PERMS
+                new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
+                REQ_LOCATION
+        );
+    }
+
+    private static final int REQ_LOCATION = 301;
+
+    /* ===================================================== */
+    /* 🔵 PREVIEW MAP WITH LIVE USER LOCATION               */
+    /* ===================================================== */
+
+    private void setupPreviewMap() {
+
+        map = findViewById(R.id.map);
+
+        map.setTileSource(TileSourceFactory.MAPNIK);
+        map.setMultiTouchControls(true);
+        map.setBuiltInZoomControls(false);
+
+        map.getController().setZoom(17.0);
+        map.getController().setCenter(
+                new GeoPoint(12.914976, 77.663804)
         );
 
-        return false;
+        // 👤 LIVE USER LOCATION OVERLAY
+        myLocationOverlay = new MyLocationNewOverlay(
+                new GpsMyLocationProvider(this),
+                map
+        );
+
+        //  myLocationOverlay.enableMyLocation();
+        //   myLocationOverlay.enableFollowLocation();
+
+        map.getOverlays().add(myLocationOverlay);
+    }
+    private void enableLocationFeatures() {
+
+        if (myLocationOverlay != null) {
+            myLocationOverlay.enableMyLocation();
+            myLocationOverlay.enableFollowLocation();
+        }
+
+        initLocationService();
+        startLocationUpdates();
+    }
+
+
+    /* ===================================================== */
+    /* CAMERA PERMISSION + LIGHT DETECTION                  */
+    /* ===================================================== */
+
+    private void requestCameraPermissionIfNeeded() {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+                    this,
+                    new String[]{Manifest.permission.CAMERA},
+                    REQ_CAMERA
+            );
+        } else {
+            initLightDetection();
+        }
+    }
+
+    private void initLightDetection() {
+
+        if (cameraLightDetector != null) return;
+
+        cameraLightDetector = new CameraLightDetector(this,
+                new CameraLightDetector.LightCallback() {
+
+                    @Override
+                    public void onDarkDetected() {
+                        runOnUiThread(() -> {
+                            txtStatus.setText("⚠ Low visibility detected");
+                            txtStatus.postDelayed(
+                                    () -> txtStatus.setText(lastStatusText),
+                                    7000
+                            );
+                        });
+                    }
+
+                    @Override
+                    public void onLightDetected() {
+                        runOnUiThread(() ->
+                                txtStatus.setText(lastStatusText)
+                        );
+                    }
+                });
+
+        cameraLightDetector.start();
+    }
+
+    /* ===================================================== */
+    /* LOCATION SERVICE                                     */
+    /* ===================================================== */
+
+    private void initLocationService() {
+
+        CampusBoundary boundary = new CampusBoundary();
+        boundary.setPolygon(campusPolygon);
+
+        UserState userState = new UserState();
+        locationService = new LocationService(boundary, userState);
+
+        locationService.setCallback(new LocationService.LocationCallback() {
+
+            @Override
+            public void onAutoCheckIn(long time) {
+                runOnUiThread(() -> {
+                    currentStatus = StatusType.CHECKED_IN;
+                    lastStatusText = "Auto checked IN at\n" +
+                            DateFormat.format("dd MMM yyyy, hh:mm a", time);
+                    txtStatus.setText(lastStatusText);
+                    btnRoute.setEnabled(false);
+                });
+            }
+
+
+            @Override
+            public void onAutoCheckOut(long time) {
+                runOnUiThread(() -> {
+                    currentStatus = StatusType.CHECKED_OUT;
+                    lastStatusText = "Auto checked OUT at\n" +
+                            DateFormat.format("dd MMM yyyy, hh:mm a", time);
+                    txtStatus.setText(lastStatusText);
+                    enableNavigateBack();
+                });
+            }
+
+            @Override
+            public void onOutsideCampus(long time) {
+                runOnUiThread(() -> {
+
+                    currentStatus = StatusType.OUTSIDE;
+                    lastStatusText = "You are currently outside campus";
+                    txtStatus.setText(lastStatusText);
+
+                    enableNavigateBack();
+                    Log.d("VOICE_CHECK","voiceModeEnabled="+voiceModeEnabled);
+
+                    if (voiceModeEnabled && ttsReady) {
+
+                      /*  tts.speak(lastStatusText,
+                                TextToSpeech.QUEUE_FLUSH,
+                                null,
+                                "OUTSIDE_MSG");*/
+                      /*  new Handler(Looper.getMainLooper()).postDelayed(
+                                () -> askNavigationAfterDelay(),
+                                5000   // wait for speech to finish
+                        );*/
+
+                    }
+                });
+            }
+
+        });
+    }
+
+    private void startLocationUpdates() {
+
+        locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
+        if (locationManager == null) return;
+
+        if (ActivityCompat.checkSelfPermission(this,
+                Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) return;
+
+        locationManager.requestLocationUpdates(
+                LocationManager.GPS_PROVIDER,
+                3000,
+                2,
+                location -> {
+                    if (locationService != null) {
+                        locationService.onLocationUpdate(
+                                location.getLatitude(),
+                                location.getLongitude()
+                        );
+                    }
+                }
+        );
+    }
+
+    private void showInitialOutsideStatus() {
+        currentStatus = StatusType.OUTSIDE;
+        lastStatusText = "You are currently outside campus";
+        txtStatus.setText(lastStatusText);
+        enableNavigateBack();
+    }
+
+    private void enableNavigateBack() {
+        if (btnRoute == null) return;
+        btnRoute.setVisibility(View.VISIBLE);
+        btnRoute.setEnabled(true);
+        btnRoute.setAlpha(1.0f);
+    }
+    public void onSendSosClicked(String reason) {
+        Toast.makeText(this,
+                "SOS triggered: " + reason,
+                Toast.LENGTH_LONG).show();
+
+        Log.d("SOS_EVENT", "Reason: " + reason);
+
+        // 🔴 TODO: Add real SOS logic here later
+        // Example:
+        // sendEmergencySMS(reason);
+        // notifyServer(reason);
+    }
+
+    public void navigateUsingSelectedRoute(RouteScore route) {
+        if (route == null) return;
+
+        GeoPoint campusGate = campusPolygon.get(0);
+
+        Uri uri = Uri.parse(
+                "google.navigation:q=" +
+                        campusGate.getLatitude() + "," +
+                        campusGate.getLongitude() +
+                        "&mode=w"
+        );
+
+        Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+        intent.setPackage("com.google.android.apps.maps");
+        startActivity(intent);
+    }
+    private void askAccessibilityProfile() {
+
+        if (!ttsReady) return;
+        awaitingProfileResponse = true;
+
+        tts.speak(
+                "Choose your preferred interaction style. " +
+                        "If you need voice assistance say Yes. " +
+                        "Otherwise tap the screen.",
+                TextToSpeech.QUEUE_FLUSH,
+                null,
+                "PROFILE_MSG"
+        );
+
+
+    }
+
+
+
+
+
+    private void showProfileDialog(){
+
+        String[] options = {
+                "Standard Experience",
+                "Voice Assisted Mode",
+                "Visual Priority Mode",
+                "Text Communication Mode",
+                "Multi-Sensory Mode"
+        };
+
+        profileDialog = new AlertDialog.Builder(this)
+                .setTitle("Select Interaction Style")
+                .setItems(options, (dialog, which) -> {
+
+                    AccessibilityProfile profile;
+
+                    switch (which) {
+                        case 1: profile = AccessibilityProfile.BLIND; break;
+                        case 2: profile = AccessibilityProfile.DEAF; break;
+                        case 3: profile = AccessibilityProfile.MUTE; break;
+                        case 4: profile = AccessibilityProfile.DEAF_BLIND; break;
+                        default: profile = AccessibilityProfile.STANDARD;
+                    }
+
+                    AppSettings.saveProfile(this, profile);
+                    AppSettings.setFirstLaunchCompleted(this); // ⭐ IMPORTANT
+
+                    Toast.makeText(this,"Interaction style saved",Toast.LENGTH_SHORT).show();
+                    dialog.dismiss();
+                })
+                .setCancelable(false)
+                .create();
+
+        profileDialog.show();
+    }
+
+    private void startVoiceSelection() {
+
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+        );
+        intent.putExtra(RecognizerIntent.EXTRA_PROMPT,
+                "Say Yes..");
+
+        startActivityForResult(intent, 500);
+    }
+    private void safeSpeak(String text, String id) {
+        if (tts == null || !ttsReady) {
+            Log.w("TTS", "TTS not ready - skipping: " + text);
+            return;
+        }
+        try {
+            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id);
+        } catch (Exception e) {
+            Log.e("TTS", "speak failed: " + e.getMessage());
+        }
+    }
+    private void speakCurrentStatusWithDelay() {
+
+        if (!voiceModeEnabled || tts == null || !ttsReady) return;
+
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+
+            if (lastStatusText != null && !lastStatusText.isEmpty()) {
+                tts.speak(lastStatusText,
+                        TextToSpeech.QUEUE_FLUSH,
+                        null,
+                        "STATUS_READ");
+            }
+
+        }, 4000);
+        // ⭐ AFTER status → ask navigation
+        new Handler(Looper.getMainLooper()).postDelayed(
+                this::askNavigationAfterDelay,
+                9000   // 4s delay + speech time buffer
+        );
     }
 
     @Override
     public void onRequestPermissionsResult(
             int requestCode,
-            @NonNull String[] permissions,
-            @NonNull int[] grantResults
+            String[] permissions,
+            int[] grantResults
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
 
-        if (requestCode == REQ_SOS_PERMS) {
-            if (allGranted(grantResults)) {
-                sendSos();
-            } else {
-                toast("SMS & location permission required for SOS");
+        if (requestCode != REQ_LOCATION) return;
+
+        if (grantResults.length > 0 &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+
+            permissionAttempts = 0;
+
+            if (tts != null)
+                tts.speak("Thank you. Location permission granted.",
+                        TextToSpeech.QUEUE_FLUSH,
+                        null,
+                        null);
+
+            enableLocationFeatures();
+            if (AppSettings.isFirstLaunch(this)) {
+                askAccessibilityProfile();
             }
+            return;
         }
-    }
 
-    private void sendSos() {
+        // ❌ DENIED
+        permissionAttempts++;
 
-        String locationText = "Location unavailable";
+        if (permissionAttempts < MAX_ATTEMPTS) {
 
-        try {
-            LocationManager lm =
-                    (LocationManager) getSystemService(LOCATION_SERVICE);
+            if (tts != null)
+                tts.speak(
+                        "Location permission denied. The screen is still open. Please press Allow.",
+                        TextToSpeech.QUEUE_FLUSH,
+                        null,
+                        null
+                );
 
-            if (lm != null &&
-                    ActivityCompat.checkSelfPermission(
-                            this,
-                            Manifest.permission.ACCESS_FINE_LOCATION
-                    ) == PackageManager.PERMISSION_GRANTED) {
-
-                Location loc =
-                        lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-
-                if (loc != null) {
-                    locationText =
-                            "https://www.openstreetmap.org/?mlat="
-                                    + loc.getLatitude()
-                                    + "&mlon=" + loc.getLongitude();
-                }
-            }
-        } catch (Exception ignored) {}
-
-        String sms =
-                "🚨 SOS ALERT\n" +
-                        "Reason: " + pendingSosReason +
-                        "\nLocation:\n" + locationText;
-
-        startActivity(new Intent(
-                Intent.ACTION_DIAL,
-                Uri.parse("tel:" + EMERGENCY_NUMBER)
-        ));
-
-        try {
-            SmsManager.getDefault().sendTextMessage(
-                    EMERGENCY_NUMBER,
-                    null,
-                    sms,
-                    null,
-                    null
+            new Handler(Looper.getMainLooper()).postDelayed(
+                    this::requestLocationPermission,
+                    2500
             );
-        } catch (Exception e) {
-            toast("Failed to send SMS");
+
+        } else {
+
+            // Detect Don't Ask Again
+            if (!ActivityCompat.shouldShowRequestPermissionRationale(
+                    this,
+                    Manifest.permission.ACCESS_FINE_LOCATION)) {
+
+                if (tts != null)
+                    tts.speak(
+                            "Permission permanently denied. Opening settings. Please enable location permission there.",
+                            TextToSpeech.QUEUE_FLUSH,
+                            null,
+                            null
+                    );
+
+                Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                intent.setData(Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+
+            } else {
+
+                if (tts != null)
+                    tts.speak(
+                            "Permission denied multiple times. Please restart app and allow permission.",
+                            TextToSpeech.QUEUE_FLUSH,
+                            null,
+                            null
+                    );
+            }
         }
-
-        toast("🚨 SOS sent successfully");
     }
 
-    /* ================= MEDIA ================= */
+    private void askNavigationAfterDelay() {
 
-    private void showSosMediaChoice() {
+        if (!voiceModeEnabled || tts == null || !ttsReady) return;
 
-        String[] options = {"📸 Take Photo", "🎥 Record Video", "Skip"};
+        awaitingNavigationResponse = true;   // ⭐ MISSING LINE — REQUIRED
+        awaitingProfileResponse = false;
+        profileCompleted = true;
 
-        new AlertDialog.Builder(this)
-                .setTitle("Add media to SOS?")
-                .setItems(options, (d, which) -> {
-                    if (which == 0 && ensureCameraPermission()) {
-                        startActivityForResult(
-                                new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE),
-                                REQ_PHOTO
-                        );
-                    } else if (which == 1 && ensureCameraPermission()) {
-                        startActivityForResult(
-                                new Intent(android.provider.MediaStore.ACTION_VIDEO_CAPTURE),
-                                REQ_VIDEO
-                        );
-                    } else {
-                        openSosChat();
-                    }
-                })
-                .show();
-    }
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
 
-    private boolean ensureCameraPermission() {
-        if (ContextCompat.checkSelfPermission(this,
-                Manifest.permission.CAMERA)
-                == PackageManager.PERMISSION_GRANTED) return true;
+            tts.speak(
+                    "Do you want to navigate back to campus? Say yes or no.",
+                    TextToSpeech.QUEUE_FLUSH,
+                    null,
+                    "NAV_PROMPT"
+            );
 
-        ActivityCompat.requestPermissions(
-                this,
-                new String[]{Manifest.permission.CAMERA},
-                REQ_CAMERA
-        );
-        return false;
+
+            // timeout safety
+            responseHandler.postDelayed(() -> {
+
+                if (awaitingNavigationResponse) {
+
+                    awaitingNavigationResponse = false;
+
+                    tts.speak(
+                            "No response received. Navigation cancelled.",
+                            TextToSpeech.QUEUE_FLUSH,
+                            null,
+                            null
+                    );
+                }
+
+            }, 30000);
+
+        }, 10000);
     }
 
     @Override
-    protected void onActivityResult(
-            int requestCode, int resultCode, Intent data
-    ) {
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        openSosChat(); // always return to SOS chat
-    }
 
-    private void openSosChat() {
-        new SOSChatDialogFragment()
-                .show(getSupportFragmentManager(), "SOS_CHAT");
-    }
+        if (requestCode == 500 && resultCode == RESULT_OK && data != null) {
 
-    /* ================= MAP ================= */
+            ArrayList<String> result =
+                    data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
 
-    private void setupMap() {
-        Configuration.getInstance().setUserAgentValue(getPackageName());
-        map = findViewById(R.id.map);
-        map.setTileSource(TileSourceFactory.MAPNIK);
-        map.setMultiTouchControls(true);
+            if (result == null || result.isEmpty()) return;
 
-        locationOverlay =
-                new MyLocationNewOverlay(new GpsMyLocationProvider(this), map);
-        locationOverlay.enableMyLocation();
-        map.getOverlays().add(locationOverlay);
+            String spoken = result.get(0).toLowerCase();
 
-        map.getController().setZoom(15.0);
-        map.getController().setCenter(campus);
+        /* =====================================================
+           1️⃣ NAVIGATION RESPONSE MODE (highest priority)
+           ===================================================== */
 
-        Marker marker = new Marker(map);
-        marker.setPosition(campus);
-        marker.setTitle("Campus");
-        map.getOverlays().add(marker);
+            if (awaitingNavigationResponse) {
 
-        drawGeofence(campus, 300);
-    }
+                awaitingNavigationResponse = false;
+                responseHandler.removeCallbacksAndMessages(null);
 
-    /* ================= CHECK-IN ================= */
+                if (spoken.matches(".*\\b(yes|yeah|yep|sure|ok)\\b.*")) {
 
-    private void startCheckoutFlow() {
-        Utils.setCheckedOut(this, true);
-        resetAlerts();
-        updateUI();
-        toast("Checked out! Monitoring started.");
-    }
+                    awaitingNavigationResponse = false;
+                    openNavigationScreen();
+                    //  navigateUsingSelectedRoute(null);
 
-    private void handleCheckIn() {
-        Utils.setCheckedOut(this, false);
-        resetAlerts();
-        updateUI();
-        toast("Checked in successfully!");
-    }
+                } else {
 
-    private void resetAlerts() {
-        alert15Shown = alert10Shown = alert5Shown = violationShown = false;
-    }
+                    tts.speak(
+                            "Transport mode not selected yet",
+                            TextToSpeech.QUEUE_FLUSH,
+                            null,
+                            null
+                    );
+                }
 
-    private void updateUI() {
-        long checkoutTime = Utils.getCheckoutTime(this);
-
-        if (Utils.isCheckedOut(this)) {
-            txtStatus.setText("You are checked out");
-            txtStatus.setTextColor(
-                    ContextCompat.getColor(this, android.R.color.holo_red_dark));
-
-            txtCheckoutTime.setText(
-                    "Checked out at " +
-                            DateFormat.format("hh:mm a", checkoutTime));
-            txtCheckoutTime.setVisibility(View.VISIBLE);
-
-            btnCheckout.setEnabled(false);
-            btnCheckin.setEnabled(true);
-            btnRoute.setEnabled(true);
-
-            startCountdown();
-        } else {
-            txtStatus.setText("You are checked in");
-            txtStatus.setTextColor(
-                    ContextCompat.getColor(this, android.R.color.holo_green_dark));
-
-            txtCheckoutTime.setVisibility(View.GONE);
-            layoutCountdown.setVisibility(View.GONE);
-
-            btnCheckout.setEnabled(true);
-            btnCheckin.setEnabled(false);
-            btnRoute.setEnabled(false);
-
-            countdownHandler.removeCallbacksAndMessages(null);
-        }
-    }
-
-    /* ================= HELPERS ================= */
-    private void startCountdown() {
-
-        countdownHandler.removeCallbacksAndMessages(null);
-
-        long checkoutTime = Utils.getCheckoutTime(this);
-        long deadline = checkoutTime + (15 * 60 * 1000); // 15 minutes
-
-        countdownRunnable = () -> {
-
-            long remaining = deadline - System.currentTimeMillis();
-
-            if (remaining <= 0) {
-                layoutCountdown.setVisibility(View.GONE);
                 return;
             }
 
-            long min = remaining / 60000;
-            long sec = (remaining / 1000) % 60;
+        /* =====================================================
+           2️⃣ PROFILE SELECTION MODE
+           ===================================================== */
+            if (profileCompleted) return;
+            AccessibilityProfile profile = AccessibilityProfile.STANDARD;
 
-            layoutCountdown.setVisibility(View.VISIBLE);
-            txtCountdown.setText(String.format("%02d:%02d", min, sec));
-
-            GradientDrawable bg =
-                    (GradientDrawable) layoutCountdown.getBackground();
-
-            if (remaining > 10 * 60 * 1000) {
-                bg.setColor(0xFF2E7D32); // green
-            } else if (remaining > 5 * 60 * 1000) {
-                bg.setColor(0xFFF9A825); // yellow
-            } else {
-                bg.setColor(0xFFC62828); // red
-                if (txtCountdown.getAnimation() == null) {
-                    txtCountdown.startAnimation(pulseAnim);
-                }
+            if (spoken.matches(".*\\b(yes|yeah|yep|sure|ok)\\b.*")) {
+                profile = AccessibilityProfile.BLIND;
+                voiceModeEnabled = true;
+            }
+            else if (spoken.matches(".*\\b(no|nope|nah)\\b.*")) {
+                profile = AccessibilityProfile.STANDARD;
+                voiceModeEnabled = false;
+            }
+            else if (spoken.contains("visual")) {
+                profile = AccessibilityProfile.DEAF;
+            }
+            else if (spoken.contains("text")) {
+                profile = AccessibilityProfile.MUTE;
+            }
+            else if (spoken.contains("multi")) {
+                profile = AccessibilityProfile.DEAF_BLIND;
+            }
+            else if (spoken.contains("standard")) {
+                voiceModeEnabled = false;
             }
 
-            countdownHandler.postDelayed(countdownRunnable, 1000);
-        };
+            /* Save profile */
+            AppSettings.saveProfile(this, profile);
+            AppSettings.setFirstLaunchCompleted(this);
+            profileCompleted = true;
 
-        countdownHandler.post(countdownRunnable);
-    }
-    private void sendSosViaSmsApp(String message) {
+            /* Close dialog if visible */
+            if (profileDialog != null && profileDialog.isShowing()) {
+                profileDialog.dismiss();
+            }
 
-        Intent intent = new Intent(Intent.ACTION_SENDTO);
-        intent.setData(Uri.parse("smsto:" + EMERGENCY_NUMBER));
-        intent.putExtra("sms_body", message);
+            Toast.makeText(this,
+                    "Interaction style saved",
+                    Toast.LENGTH_SHORT).show();
 
-        startActivity(intent);
-    }
-    public void onSendSosClicked(String reason) {
+            /* Voice confirmation */
+            if (voiceModeEnabled) {
 
-        if (!ensureSosPermissions()) return;
+                speak(this,
+                        "Interaction style accepted. Creating your profile.");
 
-        String locationUrl = getCurrentLocationUrl(); // your existing method
-
-        String message =
-                "🚨 SOS ALERT\n" +
-                        "Reason: " + reason + "\n" +
-                        "Location: " + locationUrl;
-
-        sendSosViaSmsApp(message);
-    }
-
-    private boolean allGranted(int[] results) {
-        for (int r : results) if (r != PackageManager.PERMISSION_GRANTED) return false;
-        return true;
-    }
-
-    private void toast(String msg) {
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
-    }
-
-    private void drawGeofence(GeoPoint center, int radiusMeters) {
-        Polygon circle = new Polygon();
-        circle.setPoints(Polygon.pointsAsCircle(center, radiusMeters));
-        circle.setFillColor(0x121111FF);
-        circle.setStrokeColor(0xFF0000FF);
-        circle.setStrokeWidth(3f);
-        map.getOverlays().add(circle);
-    }
-
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel =
-                    new NotificationChannel(
-                            CHANNEL_ID,
-                            "Check-in Alerts",
-                            NotificationManager.IMPORTANCE_HIGH);
-            getSystemService(NotificationManager.class)
-                    .createNotificationChannel(channel);
+                new Handler(Looper.getMainLooper()).postDelayed(
+                        this::speakCurrentStatusWithDelay,
+                        3000
+                );
+            }
         }
     }
 
-    private void logoutUser() {
-        startActivity(new Intent(this, LockActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK
-                        | Intent.FLAG_ACTIVITY_NEW_TASK));
+
+    private void openNavigationScreen() {
+
+        Intent intent = new Intent(MainActivity.this, MapActivity.class);
+        startActivity(intent);
     }
 
-    private void deregisterUser() {
-        getSharedPreferences("SmartCheckinPrefs", MODE_PRIVATE)
-                .edit().clear().apply();
 
-        startActivity(new Intent(this, RegisterActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK
-                        | Intent.FLAG_ACTIVITY_NEW_TASK));
+    /* ===================================================== */
+    /* LIFECYCLE                                            */
+    /* ===================================================== */
+
+
+    @Override
+    protected void onResume() {
+
+        super.onResume();
+        if (map != null) map.onResume();
+    }
+
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (map != null) map.onPause();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (cameraLightDetector != null) {
+            cameraLightDetector.stop();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (cameraLightDetector != null) {
+            cameraLightDetector.stop();
+            cameraLightDetector = null;
+        }
+        if (tts != null) {
+            tts.stop();
+            tts.shutdown();
+            tts = null;
+        }
     }
 }

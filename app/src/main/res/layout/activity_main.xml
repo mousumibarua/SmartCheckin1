@@ -62,7 +62,7 @@
             android:id="@+id/txtStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="You are checked in"
+            android:text=" "
             android:textSize="18sp"
             android:textStyle="bold"
             android:textColor="@android:color/holo_green_dark"
@@ -84,13 +84,15 @@
             android:id="@+id/btnCheckout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="CHECK OUT"/>
+            android:text="CHECK OUT"
+            android:visibility="gone"/>
 
         <Button
             android:id="@+id/btnCheckin"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="CHECK IN"/>
+            android:text="CHECK IN"
+            android:visibility="gone"/>
 
         <Button
             android:id="@+id/btnSOS"
@@ -102,7 +104,7 @@
             android:id="@+id/btnRoute"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Display Shortest Route"
+            android:text="Navigate Back to Campus"
             android:enabled="false"
             android:alpha="0.5"/>
 
@@ -111,6 +113,22 @@
             android:layout_width="match_parent"
             android:layout_height="300dp"
             android:layout_marginTop="8dp"/>
+
+        <ProgressBar
+            android:id="@+id/routeLoader"
+            style="?android:attr/progressBarStyleLarge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:visibility="gone" />
+        <Button
+            android:id="@+id/btnStartNav"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Start Navigation"
+            android:visibility="gone"/>
+
+
 
     </LinearLayout>
 

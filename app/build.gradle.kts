@@ -1,7 +1,7 @@
 plugins {
     id("com.android.application")
     id("com.google.gms.google-services")
-    id("com.google.firebase.crashlytics")
+    // ❌ Crashlytics removed for now (not needed, can re-add later)
 }
 
 android {
@@ -36,28 +36,33 @@ android {
 
 dependencies {
 
-    // AndroidX & UI
+    /* ================= ANDROIDX / UI ================= */
     implementation(libs.appcompat)
     implementation(libs.material)
 
-    // Location
+    /* ================= LOCATION ================= */
     implementation(libs.play.services.location)
 
-    // OSMDroid
+    /* ================= MAP (OSMDROID ONLY) ================= */
     implementation("org.osmdroid:osmdroid-android:6.1.20")
 
-    // 🔥 Firebase BOM (order does NOT matter, but keep it clean)
-    implementation(platform("com.google.firebase:firebase-bom:33.3.0"))
-    implementation("com.google.firebase:firebase-analytics")
-    //implementation("com.google.firebase:firebase-crashlytics")
-    implementation(libs.firebase.auth)
-    implementation(libs.firebase.storage)
+    /* ================= FIREBASE (CORRECT & SAFE) ================= */
 
-    // Testing
+    // ✅ Firebase BOM (SINGLE SOURCE OF TRUTH)
+    implementation(platform("com.google.firebase:firebase-bom:33.5.1"))
+
+    // ✅ Firebase SDKs (NO versions!)
+    implementation("com.google.firebase:firebase-analytics")
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-storage")
+
+    // ✅ REQUIRED by Firestore (CRASH FIX)
+    implementation("androidx.datastore:datastore-preferences:1.0.0")
+    implementation(libs.play.services.maps)
+
+    /* ================= TESTING ================= */
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
-    implementation("com.google.firebase:firebase-auth")
-    implementation("com.google.firebase:firebase-firestore")
-
 }

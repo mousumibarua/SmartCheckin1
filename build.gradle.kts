@@ -6,3 +6,4 @@ plugins {
     id("com.google.firebase.crashlytics") apply false
 
 }
+

@@ -3,6 +3,7 @@ package com.example.smartcheckin;
 import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.location.Location;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -10,6 +11,7 @@ import android.os.Looper;
 import android.preference.PreferenceManager;
 import android.util.Log;
 import android.view.View;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
@@ -36,21 +38,29 @@ import java.util.List;
 
 public class RouteActivity extends AppCompatActivity {
 
-    // ===== CONFIG =====
-    private static final long ETA_INTERVAL = 2 * 60 * 1000; // 2 minutes
+    /* ================= CONFIG ================= */
+
+    private static final long ETA_INTERVAL = 2 * 60 * 1000; // 2 min
     private static final double DESTINATION_RADIUS = 50;    // meters
+    private static final int LOCATION_REQ = 101;
+
+    /* ================= MAP & UI ================= */
 
     private MapView map;
     private Polyline routeLine;
     private Marker userMarker;
+    private TextView txtEta;
+
+    /* ================= LOCATION ================= */
 
     private GeoPoint campusLocation =
-            new GeoPoint(13.0900, 80.2800); // campus
-    private GeoPoint userLocation;
+            new GeoPoint(12.95822, 79.14180); // destination
+    private GeoPoint userLocation = null;
+
+    private boolean hasRealGpsFix = false;
 
     private FusedLocationProviderClient fusedLocationClient;
     private Handler etaHandler;
-
     private double lastEtaMinutes = -1;
 
     /* ================= LIFECYCLE ================= */
@@ -59,45 +69,43 @@ public class RouteActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_route);
+
+        // 🔐 Permission
         if (ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_FINE_LOCATION)
+                this, Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED) {
 
             ActivityCompat.requestPermissions(
                     this,
                     new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
-                    101
+                    LOCATION_REQ
             );
         }
 
-        // 🔴 REQUIRED OSMDROID CONFIG
+        // 🔴 OSMDroid config (REQUIRED)
         Configuration.getInstance().load(
                 getApplicationContext(),
                 PreferenceManager.getDefaultSharedPreferences(this)
         );
-        Configuration.getInstance().setUserAgentValue(
-                "SmartCheckin/1.0 (student-project)"
-        );
+        Configuration.getInstance().setUserAgentValue("SmartCheckin/1.0");
 
         fusedLocationClient =
                 LocationServices.getFusedLocationProviderClient(this);
 
+        // UI
         map = findViewById(R.id.map);
-        map.setTileSource(TileSourceFactory.MAPNIK);
-        map.setUseDataConnection(true);
+        txtEta = findViewById(R.id.txtEta);
+
+       map.setTileSource(TileSourceFactory.MAPNIK);
         map.setMultiTouchControls(true);
         map.getController().setZoom(16.0);
         map.getController().setCenter(campusLocation);
 
         addMarker(campusLocation, "Campus");
 
-        View backBtn = findViewById(R.id.btnBack);
-        if (backBtn != null) {
-            backBtn.setOnClickListener(v -> finish());
-        }
-        userLocation = campusLocation;
-        fetchRouteETA("walking");
+      /*  View backBtn = findViewById(R.id.btnBack);
+        if (backBtn != null) backBtn.setOnClickListener(v -> finish());*/
+
         fetchUserLocationAndRoute();
     }
 
@@ -125,13 +133,7 @@ public class RouteActivity extends AppCompatActivity {
 
         if (ContextCompat.checkSelfPermission(
                 this, Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED) {
-
-            Toast.makeText(this,
-                    "Location permission not granted",
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }
+                != PackageManager.PERMISSION_GRANTED) return;
 
         fusedLocationClient.getLastLocation()
                 .addOnSuccessListener(location -> {
@@ -143,10 +145,11 @@ public class RouteActivity extends AppCompatActivity {
                             location.getLongitude()
                     );
 
-                    map.getController().setCenter(userLocation);
-                    updateUserMarker(userLocation);
+                    hasRealGpsFix = true; // ✅ VERY IMPORTANT
 
-                    // 🔥 FETCH SHORTEST ROUTE + ETA
+                    updateUserMarker(userLocation);
+                    map.getController().animateTo(userLocation);
+
                     fetchRouteETA("walking");
                 });
     }
@@ -154,6 +157,8 @@ public class RouteActivity extends AppCompatActivity {
     /* ================= ROUTING ================= */
 
     private void fetchRouteETA(String mode) {
+
+        if (userLocation == null) return;
 
         new Thread(() -> {
             try {
@@ -191,12 +196,6 @@ public class RouteActivity extends AppCompatActivity {
     private void parseRoute(JSONObject route) throws Exception {
 
         double durationSec = route.getDouble("duration");
-        double distanceM = route.getDouble("distance");
-
-        if (distanceM <= DESTINATION_RADIUS) {
-            runOnUiThread(this::onDestinationReached);
-            return;
-        }
 
         JSONObject geometry = route.getJSONObject("geometry");
         org.json.JSONArray coords = geometry.getJSONArray("coordinates");
@@ -208,8 +207,17 @@ public class RouteActivity extends AppCompatActivity {
         }
 
         runOnUiThread(() -> {
+
             drawRoute(points);
-            showETA(durationSec, distanceM);
+            showETA(durationSec);
+
+            // ✅ SAFE DESTINATION CHECK
+            if (hasRealGpsFix &&
+                    userLocation != null &&
+                    isNearDestination(userLocation, campusLocation)) {
+
+                onDestinationReached();
+            }
         });
     }
 
@@ -227,7 +235,6 @@ public class RouteActivity extends AppCompatActivity {
         routeLine.setPoints(points);
 
         map.getOverlays().add(routeLine);
-        map.getOverlays().add(userMarker);
         map.invalidate();
     }
 
@@ -239,9 +246,9 @@ public class RouteActivity extends AppCompatActivity {
 
         userMarker = new Marker(map);
         userMarker.setPosition(point);
-        userMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM);
         userMarker.setTitle("You");
-      //  userMarker.setZIndex(10f);
+        userMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM);
+
         map.getOverlays().add(userMarker);
         map.invalidate();
     }
@@ -255,16 +262,15 @@ public class RouteActivity extends AppCompatActivity {
 
     /* ================= ETA ================= */
 
-    private void showETA(double durationSec, double distanceM) {
+    private void showETA(double durationSec) {
 
         double minutes = durationSec / 60;
 
-        lastEtaMinutes = minutes;
+        txtEta.setText(
+                "ETA: " + String.format("%.1f", minutes) + " mins"
+        );
 
-        runOnUiThread(() ->
-        Toast.makeText(this,
-                "ETA: " + String.format("%.1f", minutes) + " mins",
-                Toast.LENGTH_SHORT).show());
+        lastEtaMinutes = minutes;
     }
 
     private void startEtaUpdates() {
@@ -290,13 +296,26 @@ public class RouteActivity extends AppCompatActivity {
 
     /* ================= DESTINATION ================= */
 
+    private boolean isNearDestination(GeoPoint user, GeoPoint dest) {
+
+        float[] results = new float[1];
+        Location.distanceBetween(
+                user.getLatitude(), user.getLongitude(),
+                dest.getLatitude(), dest.getLongitude(),
+                results
+        );
+        return results[0] <= DESTINATION_RADIUS;
+    }
+
     private void onDestinationReached() {
 
         stopEtaUpdates();
 
-        Toast.makeText(this,
+        Toast.makeText(
+                this,
                 "🎉 Destination reached",
-                Toast.LENGTH_LONG).show();
+                Toast.LENGTH_LONG
+        ).show();
     }
 
     /* ================= FALLBACK ================= */
@@ -312,19 +331,18 @@ public class RouteActivity extends AppCompatActivity {
         intent.setPackage("com.google.android.apps.maps");
         startActivity(intent);
     }
+
     @Override
-    public void onRequestPermissionsResult(int requestCode,
-                                           String[] permissions,
-                                           int[] grantResults) {
+    public void onRequestPermissionsResult(
+            int requestCode, String[] permissions, int[] grantResults) {
 
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
 
-        if (requestCode == 101 &&
+        if (requestCode == LOCATION_REQ &&
                 grantResults.length > 0 &&
                 grantResults[0] == PackageManager.PERMISSION_GRANTED) {
 
             fetchUserLocationAndRoute();
         }
     }
-
 }
